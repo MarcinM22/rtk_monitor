@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTK Monitor - LC29H GPS/RTK</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📡 RTK Monitor</h1>
+            <p class="subtitle">LC29H GPS/RTK HAT - Raspberry Pi 4</p>
+            <div id="connection-status" class="status-badge disconnected">Rozłączono</div>
+        </header>
+
+        <main>
+            <!-- Status Fix -->
+            <div class="card">
+                <h2>Status Fix</h2>
+                <div class="metric-large">
+                    <div id="fix-type" class="fix-status no-fix">Brak Fix</div>
+                </div>
+                <div class="metric-detail">
+                    <span>Jakość fix:</span>
+                    <span id="fix-quality">-</span>
+                </div>
+            </div>
+
+            <!-- Satelity -->
+            <div class="card-row">
+                <div class="card">
+                    <h2>Satelity użyte</h2>
+                    <div class="metric-value" id="satellites">0</div>
+                </div>
+                <div class="card">
+                    <h2>Satelity widoczne</h2>
+                    <div class="metric-value" id="satellites-visible">0</div>
+                </div>
+            </div>
+
+            <!-- Dokładność -->
+            <div class="card">
+                <h2>Dokładność pozycji (DOP)</h2>
+                <div class="dop-grid">
+                    <div class="dop-item">
+                        <div class="dop-label">HDOP (poziom)</div>
+                        <div class="dop-value" id="hdop">99.9</div>
+                        <div class="dop-quality" id="hdop-quality">-</div>
+                    </div>
+                    <div class="dop-item">
+                        <div class="dop-label">PDOP (pozycja)</div>
+                        <div class="dop-value" id="pdop">99.9</div>
+                        <div class="dop-quality" id="pdop-quality">-</div>
+                    </div>
+                    <div class="dop-item">
+                        <div class="dop-label">VDOP (wysokość)</div>
+                        <div class="dop-value" id="vdop">99.9</div>
+                        <div class="dop-quality" id="vdop-quality">-</div>
+                    </div>
+                </div>
+                <div class="info-box">
+                    <small>
+                        <strong>Interpretacja:</strong> 
+                        Idealnie &lt;2 | Doskonale &lt;5 | Dobrze &lt;10 | Umiarkowanie &lt;20 | Słabo &gt;20
+                    </small>
+                </div>
+            </div>
+
+            <!-- Pozycja -->
+            <div class="card">
+                <h2>Pozycja</h2>
+                <div class="position-grid">
+                    <div class="position-item">
+                        <span class="position-label">Szerokość:</span>
+                        <span class="position-value" id="latitude">-</span>
+                    </div>
+                    <div class="position-item">
+                        <span class="position-label">Długość:</span>
+                        <span class="position-value" id="longitude">-</span>
+                    </div>
+                    <div class="position-item">
+                        <span class="position-label">Wysokość:</span>
+                        <span class="position-value" id="altitude">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RTK Status -->
+            <div class="card">
+                <h2>Status RTK</h2>
+                <div class="rtk-info">
+                    <div class="rtk-item">
+                        <span>Wiek korekcji:</span>
+                        <span id="rtk-age" class="rtk-value">-</span>
+                    </div>
+                    <div class="info-box">
+                        <small>
+                            💡 <strong>Wskazówka:</strong> Aby uzyskać RTK Fix, skonfiguruj połączenie z ASG-EUPOS.
+                            Zobacz instrukcję w README.md
+                        </small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Dodatkowe dane -->
+            <div class="card-row">
+                <div class="card">
+                    <h2>Prędkość</h2>
+                    <div class="metric-value" id="speed">0.0 <small>km/h</small></div>
+                </div>
+                <div class="card">
+                    <h2>Kurs</h2>
+                    <div class="metric-value" id="course">0.0°</div>
+                </div>
+            </div>
+
+            <!-- Timestamp -->
+            <div class="card">
+                <div class="timestamp">
+                    Ostatnia aktualizacja: <span id="timestamp">-</span>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Waveshare LC29H(DA) RTK HAT | <a href="https://github.com" target="_blank">Dokumentacja</a></p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

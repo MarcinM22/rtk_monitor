@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTK Monitor</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <h1>RTK Monitor</h1>
+        <div id="connection-status" class="status-dot disconnected" title="WebSocket">&#9679;</div>
+    </header>
+
+    <main>
+        <section class="card fix-card">
+            <div id="fix-badge" class="fix-badge nofix">No Fix</div>
+            <div class="fix-details">
+                <span id="satellites">0/0 sat</span>
+                <span id="diff-age"></span>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Pozycja</h2>
+            <div class="grid-2">
+                <div class="field"><label>Szerokosc</label><span id="lat">&mdash;</span></div>
+                <div class="field"><label>Dlugosc</label><span id="lon">&mdash;</span></div>
+                <div class="field"><label>Wysokosc</label><span id="alt">&mdash;</span></div>
+                <div class="field"><label>Predkosc</label><span id="speed">&mdash;</span></div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Dokladnosc (DOP)</h2>
+            <div class="grid-3">
+                <div class="field"><label>HDOP</label><span id="hdop" class="dop-value">&mdash;</span></div>
+                <div class="field"><label>PDOP</label><span id="pdop" class="dop-value">&mdash;</span></div>
+                <div class="field"><label>VDOP</label><span id="vdop" class="dop-value">&mdash;</span></div>
+            </div>
+        </section>
+
+        <section class="card ntrip-card">
+            <h2>NTRIP / RTK
+                <button id="ntrip-toggle" class="btn-small">&#9881; Ustawienia</button>
+            </h2>
+            <div class="ntrip-status">
+                <span id="ntrip-status-text">Wylaczony</span>
+                <span id="ntrip-bytes"></span>
+                <span id="ntrip-mountpoint"></span>
+            </div>
+
+            <div id="ntrip-panel" class="ntrip-panel hidden">
+                <div class="form-group">
+                    <label>Serwer</label>
+                    <select id="ntrip-host">
+                        <option value="system.asgeupos.pl">system.asgeupos.pl (ASG-EUPOS)</option>
+                        <option value="91.198.76.2">91.198.76.2 (ASG-EUPOS IP)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Port / Format</label>
+                    <select id="ntrip-port">
+                        <option value="8086">8086 - RTCM 3.4 GPS+GLO+GAL+BDS (zalecany)</option>
+                        <option value="8082">8082 - RTCM 3.1 GPS+GLO (polnoc)</option>
+                        <option value="8083">8083 - RTCM 3.1 GPS+GLO (poludnie)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Stacja referencyjna</label>
+                    <select id="ntrip-station">
+                        <option value="AUTO">AUTO - Automatycznie najblizszaja</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Login ASG-EUPOS</label>
+                    <input type="text" id="ntrip-user" placeholder="Twoj login" autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label>Haslo ASG-EUPOS</label>
+                    <input type="password" id="ntrip-pass" placeholder="Twoje haslo" autocomplete="current-password">
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" id="btn-save-ntrip">Zapisz i polacz</button>
+                    <button class="btn btn-danger" id="btn-stop-ntrip">Rozlacz</button>
+                </div>
+                <div id="ntrip-error" class="error-msg hidden"></div>
+            </div>
+        </section>
+
+        <section class="card measure-card">
+            <h2>Pomiary
+                <button id="measure-toggle" class="btn-small">&#9881; Projekt</button>
+            </h2>
+
+            <div id="project-panel" class="ntrip-panel hidden">
+                <div class="form-group">
+                    <label>Projekt</label>
+                    <div class="input-row">
+                        <input type="text" id="project-name" placeholder="Nazwa projektu">
+                        <button class="btn btn-primary btn-compact" id="btn-create-project">Otworz</button>
+                    </div>
+                </div>
+                <div id="project-list"></div>
+                <div id="project-error" class="error-msg hidden"></div>
+            </div>
+
+            <div id="project-info" class="project-info hidden">
+                <span id="project-current-name"></span>
+                <span id="project-point-count"></span>
+            </div>
+
+            <div id="measure-controls" class="measure-controls">
+                <div class="input-row">
+                    <input type="text" id="point-name" placeholder="Nazwa punktu" disabled>
+                    <button class="btn btn-measure" id="btn-measure" disabled>Zapisz punkt</button>
+                </div>
+            </div>
+
+            <div id="measure-progress" class="measure-progress hidden">
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <div id="measure-status-text" class="measure-status-text"></div>
+                <button class="btn btn-danger btn-compact" id="btn-cancel-measure">Anuluj</button>
+            </div>
+
+            <div id="measure-result" class="measure-result hidden"></div>
+        </section>
+
+        <section class="card">
+            <h2>Dodatkowe</h2>
+            <div class="grid-2">
+                <div class="field"><label>Kurs</label><span id="course">&mdash;</span></div>
+                <div class="field"><label>Czas GPS</label><span id="gps-time">&mdash;</span></div>
+            </div>
+        </section>
+    </main>
+
+    <footer>RTK Monitor &bull; Waveshare LC29H(DA) &bull; ASG-EUPOS</footer>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

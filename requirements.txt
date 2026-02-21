@@ -1,0 +1,4 @@
+flask>=3.0
+pyserial>=3.5
+pynmea2>=1.19
+pyproj>=3.4

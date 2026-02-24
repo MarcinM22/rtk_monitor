@@ -133,7 +133,35 @@ STATIONS = {
 }
 
 
+# Stan wytyczania
+stakeout_target = {
+    'active': False,
+    'name': None,
+    'x': None,
+    'y': None,
+    'h': None,
+}
+
 # === HTTP Routes ===
+
+def _get_stakeout_data(gps_data):
+    """Oblicz dane wytyczania dla biezacej pozycji GPS."""
+    if not stakeout_target['active']:
+        return {'active': False}
+    diff = surveyor.compute_stakeout(
+        stakeout_target['x'], stakeout_target['y'], stakeout_target['h'],
+        gps_data
+    )
+    result = {
+        'active': True,
+        'name': stakeout_target['name'],
+        'target_x': stakeout_target['x'],
+        'target_y': stakeout_target['y'],
+        'target_h': stakeout_target['h'],
+    }
+    if diff:
+        result.update(diff)
+    return result
 
 @app.route('/')
 def index():
@@ -174,6 +202,7 @@ def api_status():
         'ntrip_mountpoint': ntrip_stats.get('mountpoint'),
         'ntrip_error': ntrip_stats.get('error'),
         'measurement': surveyor.get_measurement_status(),
+        'stakeout': _get_stakeout_data(gps_data),
     })
 
 
@@ -246,6 +275,7 @@ def stop_ntrip():
 
 # === Pomiary / Projekty ===
 
+
 @app.route('/api/projects', methods=['GET'])
 def list_projects():
     """Lista projektow."""
@@ -263,6 +293,12 @@ def create_project():
         return jsonify({'status': 'error', 'message': 'Podaj nazwe projektu'}), 400
     result = surveyor.create_project(data['name'])
     return jsonify(result)
+
+
+@app.route('/api/points', methods=['GET'])
+def list_points():
+    """Lista pomierzonych punktow z biezacego projektu."""
+    return jsonify({'points': surveyor.get_project_points()})
 
 
 @app.route('/api/measure/start', methods=['POST'])
@@ -289,6 +325,46 @@ def cancel_measurement():
 def measurement_status():
     """Status biezacego pomiaru."""
     return jsonify(surveyor.get_measurement_status())
+
+
+# === Wytyczanie ===
+
+@app.route('/api/stakeout/files', methods=['GET'])
+def stakeout_files():
+    """Lista plikow do wytyczenia."""
+    return jsonify({'files': surveyor.list_stakeout_files()})
+
+
+@app.route('/api/stakeout/file/<filename>', methods=['GET'])
+def stakeout_file_points(filename):
+    """Punkty z pliku wytyczenia."""
+    points = surveyor.load_stakeout_file(filename)
+    return jsonify({'points': points, 'filename': filename})
+
+
+@app.route('/api/stakeout/start', methods=['POST'])
+def stakeout_start():
+    """Ustaw punkt docelowy wytyczania."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'status': 'error', 'message': 'Brak danych'}), 400
+    try:
+        stakeout_target['active'] = True
+        stakeout_target['name'] = data.get('name', '?')
+        stakeout_target['x'] = float(data['x'])
+        stakeout_target['y'] = float(data['y'])
+        stakeout_target['h'] = float(data['h']) if data.get('h') not in (None, '', 'null') else None
+        return jsonify({'status': 'ok', 'message': 'Wytyczanie: %s' % stakeout_target['name']})
+    except (KeyError, ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': 'Nieprawidlowe dane: %s' % e}), 400
+
+
+@app.route('/api/stakeout/stop', methods=['POST'])
+def stakeout_stop():
+    """Zatrzymaj wytyczanie."""
+    stakeout_target['active'] = False
+    stakeout_target['name'] = None
+    return jsonify({'status': 'ok'})
 
 
 # === Main ===

@@ -181,6 +181,11 @@
         if (d.measurement) {
             updateMeasureStatus(d.measurement);
         }
+
+        // Wytyczanie
+        if (d.stakeout) {
+            updateStakeout(d.stakeout);
+        }
     }
 
     function updateDOP(id, val) {
@@ -452,6 +457,7 @@
             var input = document.getElementById("point-name");
             if (input) input.value = "";
             loadProjects();
+            if (pointsOpen) loadPoints();
         } else if (m.error && measureActive) {
             measureActive = false;
             showMeasureProgress(false);
@@ -481,8 +487,278 @@
         console.log("RTK Monitor: init");
         setupNtripPanel();
         setupMeasurePanel();
+        setupStakeoutPanel();
+        setupPointsPanel();
         loadConfig();
         startPolling();
+    }
+
+    // === Wytyczanie ===
+
+    var stakeoutPanelOpen = false;
+
+    function setupStakeoutPanel() {
+        var toggleBtn = document.getElementById("stakeout-toggle");
+        if (toggleBtn) {
+            toggleBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                stakeoutPanelOpen = !stakeoutPanelOpen;
+                var panel = document.getElementById("stakeout-panel");
+                if (panel) {
+                    if (stakeoutPanelOpen) {
+                        panel.classList.remove("hidden");
+                        loadStakeoutSources();
+                    } else {
+                        panel.classList.add("hidden");
+                    }
+                }
+            });
+        }
+
+        var srcSel = document.getElementById("stakeout-source");
+        if (srcSel) {
+            srcSel.addEventListener("change", function() {
+                showStakeoutSource(this.value);
+            });
+        }
+
+        var fileSel = document.getElementById("stakeout-file");
+        if (fileSel) {
+            fileSel.addEventListener("change", function() {
+                if (this.value) loadStakeoutFilePoints(this.value);
+            });
+        }
+
+        var startBtn = document.getElementById("btn-stakeout-start");
+        if (startBtn) {
+            startBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                startStakeout();
+            });
+        }
+
+        var stopBtn = document.getElementById("btn-stakeout-stop");
+        if (stopBtn) {
+            stopBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                stopStakeout();
+            });
+        }
+    }
+
+    function showStakeoutSource(src) {
+        var panels = ['stakeout-manual', 'stakeout-from-project', 'stakeout-from-file'];
+        var map = { manual: 'stakeout-manual', project: 'stakeout-from-project', file: 'stakeout-from-file' };
+        for (var i = 0; i < panels.length; i++) {
+            var el = document.getElementById(panels[i]);
+            if (el) {
+                if (panels[i] === map[src]) el.classList.remove("hidden");
+                else el.classList.add("hidden");
+            }
+        }
+    }
+
+    function loadStakeoutSources() {
+        // Zaladuj punkty z projektu
+        fetch("/api/points").then(function(r) { return r.json(); }).then(function(data) {
+            var sel = document.getElementById("stakeout-project-point");
+            if (sel && data.points) {
+                sel.innerHTML = '<option value="">-- wybierz punkt --</option>';
+                for (var i = 0; i < data.points.length; i++) {
+                    var p = data.points[i];
+                    var o = document.createElement("option");
+                    o.value = JSON.stringify({name: p.name, x: p.x, y: p.y, h: p.h});
+                    o.textContent = p.name + " (X:" + (p.x ? p.x.toFixed(1) : "?") + " Y:" + (p.y ? p.y.toFixed(1) : "?") + ")";
+                    sel.appendChild(o);
+                }
+            }
+        }).catch(function() {});
+
+        // Zaladuj pliki wytyczenia
+        fetch("/api/stakeout/files").then(function(r) { return r.json(); }).then(function(data) {
+            var sel = document.getElementById("stakeout-file");
+            if (sel && data.files) {
+                sel.innerHTML = '<option value="">-- wybierz plik --</option>';
+                for (var i = 0; i < data.files.length; i++) {
+                    var f = data.files[i];
+                    var o = document.createElement("option");
+                    o.value = f.name;
+                    o.textContent = f.name + " (" + f.points + " pkt)";
+                    sel.appendChild(o);
+                }
+            }
+        }).catch(function() {});
+    }
+
+    function loadStakeoutFilePoints(filename) {
+        fetch("/api/stakeout/file/" + encodeURIComponent(filename))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var sel = document.getElementById("stakeout-file-point");
+                if (sel && data.points) {
+                    sel.innerHTML = '<option value="">-- wybierz punkt --</option>';
+                    for (var i = 0; i < data.points.length; i++) {
+                        var p = data.points[i];
+                        var o = document.createElement("option");
+                        o.value = JSON.stringify({name: p.name, x: p.x, y: p.y, h: p.h});
+                        o.textContent = p.name + " (X:" + p.x.toFixed(1) + " Y:" + p.y.toFixed(1) + ")";
+                        sel.appendChild(o);
+                    }
+                }
+            })
+            .catch(function() {});
+    }
+
+    function startStakeout() {
+        var src = getVal("stakeout-source");
+        var target = null;
+
+        if (src === "manual") {
+            var name = getVal("stakeout-name") || "Reczny";
+            var x = parseFloat(getVal("stakeout-x"));
+            var y = parseFloat(getVal("stakeout-y"));
+            var h = getVal("stakeout-h") ? parseFloat(getVal("stakeout-h")) : null;
+            if (isNaN(x) || isNaN(y)) { alert("Podaj X i Y"); return; }
+            target = {name: name, x: x, y: y, h: h};
+        } else if (src === "project") {
+            var val = getVal("stakeout-project-point");
+            if (!val) { alert("Wybierz punkt"); return; }
+            target = JSON.parse(val);
+        } else if (src === "file") {
+            var val2 = getVal("stakeout-file-point");
+            if (!val2) { alert("Wybierz punkt"); return; }
+            target = JSON.parse(val2);
+        }
+
+        if (!target) return;
+
+        fetch("/api/stakeout/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(target)
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(res) {
+            if (res.status === "ok") {
+                stakeoutPanelOpen = false;
+                var panel = document.getElementById("stakeout-panel");
+                if (panel) panel.classList.add("hidden");
+            } else {
+                alert(res.message || "Blad");
+            }
+        })
+        .catch(function() { alert("Blad komunikacji"); });
+    }
+
+    function stopStakeout() {
+        fetch("/api/stakeout/stop", { method: "POST" }).catch(function() {});
+        var disp = document.getElementById("stakeout-display");
+        if (disp) disp.classList.add("hidden");
+    }
+
+    function updateStakeout(s) {
+        var disp = document.getElementById("stakeout-display");
+        if (!s || !s.active) {
+            if (disp) disp.classList.add("hidden");
+            return;
+        }
+        if (disp) disp.classList.remove("hidden");
+
+        setText("stakeout-target-name", "Cel: " + s.name);
+
+        if (s.dN !== undefined && s.dN !== null) {
+            var absN = Math.abs(s.dN);
+            var dirN = s.dN >= 0 ? "N" : "S";
+            var nsEl = document.getElementById("stakeout-ns");
+            var nsLbl = document.getElementById("stakeout-ns-label");
+            if (nsEl) {
+                nsEl.textContent = formatDist(absN);
+                nsEl.className = "stakeout-value " + (absN < 0.05 ? "on-point" : (s.dN >= 0 ? "go-north" : "go-south"));
+            }
+            if (nsLbl) nsLbl.textContent = dirN + " (" + (s.dN >= 0 ? "idz polnoc" : "idz poludnie") + ")";
+
+            var absE = Math.abs(s.dE);
+            var dirE = s.dE >= 0 ? "E" : "W";
+            var ewEl = document.getElementById("stakeout-ew");
+            var ewLbl = document.getElementById("stakeout-ew-label");
+            if (ewEl) {
+                ewEl.textContent = formatDist(absE);
+                ewEl.className = "stakeout-value " + (absE < 0.05 ? "on-point" : (s.dE >= 0 ? "go-east" : "go-west"));
+            }
+            if (ewLbl) ewLbl.textContent = dirE + " (" + (s.dE >= 0 ? "idz wschod" : "idz zachod") + ")";
+
+            setText("stakeout-dist", formatDist(s.dist2d));
+        }
+
+        var udEl = document.getElementById("stakeout-ud");
+        var udLbl = document.getElementById("stakeout-ud-label");
+        if (s.dH !== undefined && s.dH !== null) {
+            var absH = Math.abs(s.dH);
+            if (udEl) {
+                udEl.textContent = formatDist(absH);
+                udEl.className = "stakeout-value " + (absH < 0.05 ? "on-point" : (s.dH >= 0 ? "go-up" : "go-down"));
+            }
+            if (udLbl) udLbl.textContent = s.dH >= 0 ? "W gore" : "W dol";
+        } else {
+            if (udEl) { udEl.textContent = "---"; udEl.className = "stakeout-value"; }
+            if (udLbl) udLbl.textContent = "Wys.";
+        }
+    }
+
+    function formatDist(m) {
+        if (m < 0.01) return "0.000 m";
+        if (m < 1.0) return m.toFixed(3) + " m";
+        if (m < 100) return m.toFixed(2) + " m";
+        return m.toFixed(1) + " m";
+    }
+
+    // === Pomierzone punkty ===
+
+    var pointsOpen = false;
+
+    function setupPointsPanel() {
+        var toggleBtn = document.getElementById("points-toggle");
+        if (toggleBtn) {
+            toggleBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                pointsOpen = !pointsOpen;
+                var wrap = document.getElementById("points-table-wrap");
+                if (wrap) {
+                    if (pointsOpen) {
+                        wrap.classList.remove("hidden");
+                        toggleBtn.textContent = "Ukryj";
+                        loadPoints();
+                    } else {
+                        wrap.classList.add("hidden");
+                        toggleBtn.textContent = "Pokaz";
+                    }
+                }
+            });
+        }
+    }
+
+    function loadPoints() {
+        fetch("/api/points").then(function(r) { return r.json(); }).then(function(data) {
+            var tbody = document.getElementById("points-tbody");
+            var empty = document.getElementById("points-empty");
+            if (!tbody) return;
+            tbody.innerHTML = "";
+            if (!data.points || data.points.length === 0) {
+                if (empty) empty.style.display = "";
+                return;
+            }
+            if (empty) empty.style.display = "none";
+            for (var i = 0; i < data.points.length; i++) {
+                var p = data.points[i];
+                var tr = document.createElement("tr");
+                tr.innerHTML = "<td>" + p.id + "</td>" +
+                    "<td>" + p.name + "</td>" +
+                    "<td>" + (p.x ? p.x.toFixed(3) : "-") + "</td>" +
+                    "<td>" + (p.y ? p.y.toFixed(3) : "-") + "</td>" +
+                    "<td>" + (p.h ? p.h.toFixed(3) : "-") + "</td>";
+                tbody.appendChild(tr);
+            }
+        }).catch(function() {});
     }
 
     // Uruchom po zaladowaniu DOM

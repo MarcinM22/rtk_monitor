@@ -128,6 +128,102 @@
             <div id="measure-result" class="measure-result hidden"></div>
         </section>
 
+        <section class="card stakeout-card">
+            <h2>Wytyczanie
+                <button id="stakeout-toggle" class="btn-small">&#9881; Opcje</button>
+            </h2>
+
+            <div id="stakeout-panel" class="ntrip-panel hidden">
+                <div class="form-group">
+                    <label>Zrodlo punktow</label>
+                    <select id="stakeout-source">
+                        <option value="manual">Reczne wprowadzanie</option>
+                        <option value="project">Z biezacego projektu</option>
+                        <option value="file">Z pliku (wytyczenie/)</option>
+                    </select>
+                </div>
+
+                <div id="stakeout-manual" class="stakeout-source-panel">
+                    <div class="form-group">
+                        <label>Nazwa punktu</label>
+                        <input type="text" id="stakeout-name" placeholder="Nazwa">
+                    </div>
+                    <div class="form-group">
+                        <label>X (northing PL-2000)</label>
+                        <input type="text" id="stakeout-x" placeholder="np. 5520302.019" inputmode="decimal">
+                    </div>
+                    <div class="form-group">
+                        <label>Y (easting PL-2000)</label>
+                        <input type="text" id="stakeout-y" placeholder="np. 6552084.257" inputmode="decimal">
+                    </div>
+                    <div class="form-group">
+                        <label>H (EVRF2007, opcjonalnie)</label>
+                        <input type="text" id="stakeout-h" placeholder="np. 281.610" inputmode="decimal">
+                    </div>
+                </div>
+
+                <div id="stakeout-from-project" class="stakeout-source-panel hidden">
+                    <div class="form-group">
+                        <label>Wybierz punkt</label>
+                        <select id="stakeout-project-point"><option value="">-- brak punktow --</option></select>
+                    </div>
+                </div>
+
+                <div id="stakeout-from-file" class="stakeout-source-panel hidden">
+                    <div class="form-group">
+                        <label>Plik</label>
+                        <select id="stakeout-file"><option value="">-- brak plikow --</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Punkt</label>
+                        <select id="stakeout-file-point"><option value="">-- wybierz plik --</option></select>
+                    </div>
+                </div>
+
+                <div class="form-actions">
+                    <button class="btn btn-primary" id="btn-stakeout-start">Wytyczaj</button>
+                    <button class="btn btn-danger" id="btn-stakeout-stop">Stop</button>
+                </div>
+            </div>
+
+            <div id="stakeout-display" class="stakeout-display hidden">
+                <div class="stakeout-target-name" id="stakeout-target-name"></div>
+                <div class="stakeout-grid">
+                    <div class="stakeout-item">
+                        <span class="stakeout-label" id="stakeout-ns-label">N/S</span>
+                        <span class="stakeout-value" id="stakeout-ns">---</span>
+                    </div>
+                    <div class="stakeout-item">
+                        <span class="stakeout-label" id="stakeout-ew-label">E/W</span>
+                        <span class="stakeout-value" id="stakeout-ew">---</span>
+                    </div>
+                    <div class="stakeout-item">
+                        <span class="stakeout-label" id="stakeout-ud-label">Wys.</span>
+                        <span class="stakeout-value" id="stakeout-ud">---</span>
+                    </div>
+                    <div class="stakeout-item">
+                        <span class="stakeout-label">Odl. 2D</span>
+                        <span class="stakeout-value" id="stakeout-dist">---</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="card points-card">
+            <h2>Pomierzone punkty
+                <button id="points-toggle" class="btn-small">Pokaz</button>
+            </h2>
+            <div id="points-table-wrap" class="hidden">
+                <table id="points-table" class="points-table">
+                    <thead>
+                        <tr><th>Nr</th><th>Nazwa</th><th>X</th><th>Y</th><th>H</th></tr>
+                    </thead>
+                    <tbody id="points-tbody"></tbody>
+                </table>
+                <div id="points-empty" class="points-empty">Brak pomierzonych punktow</div>
+            </div>
+        </section>
+
         <section class="card">
             <h2>Dodatkowe</h2>
             <div class="grid-2">

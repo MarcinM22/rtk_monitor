@@ -447,6 +447,137 @@ class Surveyor:
 
     # === Pomocnicze ===
 
+    def get_project_points(self):
+        """Zwroc liste pomierzonych punktow z biezacego projektu."""
+        if not self._current_project:
+            return []
+        csv_path = self._current_project['csv_path']
+        if not os.path.exists(csv_path):
+            return []
+        points = []
+        try:
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f, delimiter=';')
+                header = next(reader, None)
+                if not header:
+                    return []
+                for row in reader:
+                    if len(row) < 5:
+                        continue
+                    try:
+                        points.append({
+                            'id': row[0],
+                            'name': row[1],
+                            'x': float(row[2]) if row[2] else None,
+                            'y': float(row[3]) if row[3] else None,
+                            'h': float(row[4]) if row[4] else None,
+                            'lat': float(row[5]) if len(row) > 5 and row[5] else None,
+                            'lon': float(row[6]) if len(row) > 6 and row[6] else None,
+                            'h_elips': float(row[7]) if len(row) > 7 and row[7] else None,
+                        })
+                    except (ValueError, IndexError):
+                        continue
+        except Exception as e:
+            logger.error("Blad odczytu CSV: %s", e)
+        return points
+
+    # === Wytyczanie ===
+
+    def get_stakeout_dir(self):
+        """Zwroc sciezke do katalogu wytyczanie."""
+        d = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wytyczenie')
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def list_stakeout_files(self):
+        """Lista plikow TXT w katalogu wytyczenie/."""
+        d = self.get_stakeout_dir()
+        files = []
+        for f in sorted(os.listdir(d)):
+            if f.lower().endswith('.txt'):
+                fpath = os.path.join(d, f)
+                count = 0
+                try:
+                    with open(fpath, 'r', encoding='utf-8') as fh:
+                        for line in fh:
+                            parts = line.strip().split(',')
+                            if len(parts) >= 3:
+                                count += 1
+                except Exception:
+                    pass
+                files.append({'name': f, 'points': count})
+        return files
+
+    def load_stakeout_file(self, filename):
+        """Wczytaj punkty z pliku TXT. Format: nazwa,x,y,h"""
+        safe = os.path.basename(filename)
+        fpath = os.path.join(self.get_stakeout_dir(), safe)
+        if not os.path.exists(fpath):
+            return []
+        points = []
+        try:
+            with open(fpath, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parts = line.split(',')
+                    if len(parts) < 3:
+                        continue
+                    try:
+                        name = parts[0].strip()
+                        x = float(parts[1].strip())
+                        y = float(parts[2].strip())
+                        h = float(parts[3].strip()) if len(parts) > 3 and parts[3].strip() else None
+                        points.append({'name': name, 'x': x, 'y': y, 'h': h})
+                    except ValueError:
+                        continue
+        except Exception as e:
+            logger.error("Blad odczytu pliku wytyczenia %s: %s", safe, e)
+        return points
+
+    def compute_stakeout(self, target_x, target_y, target_h, gps_data):
+        """Oblicz roznice do punktu docelowego.
+        target_x, target_y: PL-2000 (X=northing, Y=easting)
+        target_h: H normalna EVRF2007
+        Zwraca dict z dN, dE, dH, dist2d, dist3d.
+        """
+        lat = gps_data.get('latitude')
+        lon = gps_data.get('longitude')
+        if lat is None or lon is None:
+            return None
+
+        # Konwertuj aktualna pozycje GPS na PL-2000
+        cur_x, cur_y = self.converter.wgs84_to_pl2000(lat, lon)
+        if cur_x is None or cur_y is None:
+            return None
+
+        # Aktualna wysokosc normalna
+        h_ell = gps_data.get('altitude_ellipsoidal') or gps_data.get('altitude')
+        cur_h = self.converter.ellipsoidal_to_normal(lat, lon, h_ell) if h_ell else None
+
+        dN = target_x - cur_x  # + = idz na polnoc
+        dE = target_y - cur_y  # + = idz na wschod
+        dist2d = math.sqrt(dN * dN + dE * dE)
+
+        result = {
+            'dN': round(dN, 3),
+            'dE': round(dE, 3),
+            'dH': None,
+            'dist2d': round(dist2d, 3),
+            'dist3d': None,
+            'cur_x': round(cur_x, 3),
+            'cur_y': round(cur_y, 3),
+            'cur_h': round(cur_h, 3) if cur_h else None,
+        }
+
+        if target_h is not None and cur_h is not None:
+            dH = target_h - cur_h  # + = idz do gory
+            result['dH'] = round(dH, 3)
+            result['dist3d'] = round(math.sqrt(dN * dN + dE * dE + dH * dH), 3)
+
+        return result
+
     def _count_existing_points(self, csv_path):
         """Policz istniejace punkty w CSV."""
         if not os.path.exists(csv_path):

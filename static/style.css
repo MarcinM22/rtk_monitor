@@ -419,3 +419,98 @@ footer {
     .fix-badge { font-size: 1.2rem; padding: 6px 16px; }
     .form-actions { flex-direction: column; }
 }
+
+/* === Wytyczanie === */
+
+.stakeout-display {
+    margin-top: 10px;
+}
+
+.stakeout-target-name {
+    font-size: 0.85rem;
+    color: var(--accent);
+    margin-bottom: 10px;
+    padding: 4px 8px;
+    background: rgba(79, 195, 247, 0.1);
+    border-radius: 6px;
+    text-align: center;
+    font-weight: 600;
+}
+
+.stakeout-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.stakeout-item {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    text-align: center;
+}
+
+.stakeout-label {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.stakeout-value {
+    display: block;
+    font-size: 1.2rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.stakeout-value.go-north, .stakeout-value.go-up { color: var(--green); }
+.stakeout-value.go-south, .stakeout-value.go-down { color: var(--red); }
+.stakeout-value.go-east { color: var(--accent); }
+.stakeout-value.go-west { color: var(--orange); }
+.stakeout-value.on-point { color: var(--green); font-size: 1rem; }
+
+.stakeout-source-panel { margin-top: 8px; }
+
+/* === Pomierzone punkty === */
+
+.points-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    margin-top: 8px;
+}
+
+.points-table th {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    text-align: left;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+}
+
+.points-table td {
+    padding: 5px 6px;
+    border-bottom: 1px solid rgba(42, 58, 74, 0.5);
+    white-space: nowrap;
+}
+
+.points-table tbody tr:hover {
+    background: rgba(79, 195, 247, 0.05);
+}
+
+.points-empty {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    padding: 12px;
+}
+
+.points-table-wrap {
+    max-height: 300px;
+    overflow-y: auto;
+}

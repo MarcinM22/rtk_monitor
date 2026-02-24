@@ -1,0 +1,5 @@
+# Przyklad pliku wytyczenia
+# Format: nazwa,X_PL2000,Y_PL2000,H_EVRF2007
+# Komentarze zaczynaja sie od #
+# X = northing (5XXXXXX), Y = easting (6XXXXXX)
+5001,5520301.948,6552084.235,281.610

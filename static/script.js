@@ -1,6 +1,7 @@
 /*
  * RTK Monitor - Frontend
  * Komunikacja: HTTP polling 1 Hz
+ * Nowe: wysokosc anteny, dokladnosc, temp CPU, mapa canvas z DXF
  */
 
 (function() {
@@ -8,7 +9,7 @@
 
     var ntripPanelOpen = false;
 
-    // === NTRIP Panel - dziala NIEZALEZNIE od WebSocket ===
+    // === NTRIP Panel ===
 
     function setupNtripPanel() {
         var toggleBtn = document.getElementById("ntrip-toggle");
@@ -18,11 +19,8 @@
                 ntripPanelOpen = !ntripPanelOpen;
                 var panel = document.getElementById("ntrip-panel");
                 if (panel) {
-                    if (ntripPanelOpen) {
-                        panel.classList.remove("hidden");
-                    } else {
-                        panel.classList.add("hidden");
-                    }
+                    if (ntripPanelOpen) panel.classList.remove("hidden");
+                    else panel.classList.add("hidden");
                 }
             });
         }
@@ -48,7 +46,6 @@
         fetch("/api/config")
             .then(function(r) { return r.json(); })
             .then(function(cfg) {
-                // Zaladuj liste stacji
                 var sel = document.getElementById("ntrip-station");
                 if (sel && cfg.stations) {
                     sel.innerHTML = "";
@@ -62,7 +59,6 @@
                         sel.appendChild(o);
                     }
                 }
-                // Ustaw wartosci z konfiguracji
                 var n = cfg.ntrip;
                 if (n) {
                     setVal("ntrip-host", n.host);
@@ -72,6 +68,11 @@
                     if (n.password && n.password !== "") {
                         setVal("ntrip-pass", n.password);
                     }
+                }
+                // Wysokosc anteny
+                if (cfg.antenna_height !== undefined) {
+                    var ah = document.getElementById("antenna-height");
+                    if (ah) ah.value = cfg.antenna_height > 0 ? cfg.antenna_height : "";
                 }
             })
             .catch(function(e) {
@@ -116,6 +117,33 @@
             .catch(function(e) { console.error("Blad stop NTRIP:", e); });
     }
 
+    // === Wysokosc anteny ===
+
+    function setupAntennaHeight() {
+        var btn = document.getElementById("btn-save-antenna");
+        if (btn) {
+            btn.addEventListener("click", function(e) {
+                e.preventDefault();
+                var val = parseFloat(document.getElementById("antenna-height").value) || 0;
+                fetch("/api/antenna_height", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ height: val })
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(res) {
+                    if (res.status === "ok") {
+                        btn.textContent = "OK!";
+                        setTimeout(function() { btn.textContent = "Zapisz"; }, 1500);
+                    } else {
+                        alert(res.message || "Blad");
+                    }
+                })
+                .catch(function() { alert("Blad komunikacji"); });
+            });
+        }
+    }
+
     // === Aktualizacja UI ===
 
     function updateUI(d) {
@@ -137,6 +165,21 @@
         // Satelity
         setText("satellites", (d.satellites_used || 0) + "/" + (d.satellites_visible || 0) + " sat");
 
+        // Dokladnosc estymowana
+        var accDisp = document.getElementById("accuracy-display");
+        if (d.accuracy_h != null && d.accuracy_v != null) {
+            if (accDisp) accDisp.classList.remove("hidden");
+            setText("acc-h", "H: \u00B1" + d.accuracy_h.toFixed(3) + " m");
+            setText("acc-v", "V: \u00B1" + d.accuracy_v.toFixed(3) + " m");
+            // Koloruj
+            var accHEl = document.getElementById("acc-h");
+            var accVEl = document.getElementById("acc-v");
+            if (accHEl) accHEl.className = "acc-val " + accColor(d.accuracy_h);
+            if (accVEl) accVEl.className = "acc-val " + accColor(d.accuracy_v);
+        } else {
+            if (accDisp) accDisp.classList.add("hidden");
+        }
+
         // Pozycja
         setText("lat", d.latitude != null ? d.latitude.toFixed(8) + "\u00B0" : "\u2014");
         setText("lon", d.longitude != null ? d.longitude.toFixed(8) + "\u00B0" : "\u2014");
@@ -150,7 +193,6 @@
 
         // NTRIP
         var ntrip = d.ntrip || {};
-        // Fallback: dane moga byc flat (z /api/status)
         if (!d.ntrip && d.ntrip_connected !== undefined) {
             ntrip = {
                 connected: d.ntrip_connected,
@@ -173,19 +215,34 @@
             }
         }
 
+        // CPU temp
+        if (d.cpu_temp != null) {
+            var cpuEl = document.getElementById("cpu-temp");
+            if (cpuEl) {
+                cpuEl.textContent = d.cpu_temp.toFixed(0) + "\u00B0C";
+                if (d.cpu_temp < 50) cpuEl.className = "cpu-temp temp-ok";
+                else if (d.cpu_temp < 65) cpuEl.className = "cpu-temp temp-warm";
+                else if (d.cpu_temp < 75) cpuEl.className = "cpu-temp temp-hot";
+                else cpuEl.className = "cpu-temp temp-critical";
+            }
+        }
+
         // Dodatkowe
         setText("course", d.course != null ? d.course.toFixed(1) + "\u00B0" : "\u2014");
         setText("gps-time", d.timestamp || "\u2014");
 
         // Pomiar
-        if (d.measurement) {
-            updateMeasureStatus(d.measurement);
-        }
+        if (d.measurement) updateMeasureStatus(d.measurement);
 
         // Wytyczanie
-        if (d.stakeout) {
-            updateStakeout(d.stakeout);
-        }
+        if (d.stakeout) updateStakeout(d.stakeout);
+    }
+
+    function accColor(val) {
+        if (val <= 0.03) return "acc-excellent";
+        if (val <= 0.05) return "acc-good";
+        if (val <= 0.10) return "acc-ok";
+        return "acc-poor";
     }
 
     function updateDOP(id, val) {
@@ -219,17 +276,11 @@
         }
         if (by) {
             var parts = [];
-            if (n.bytes_received > 0) {
-                parts.push("odb: " + (n.bytes_received / 1024).toFixed(1) + " KB");
-            }
-            if (n.bytes_written > 0) {
-                parts.push("wys: " + (n.bytes_written / 1024).toFixed(1) + " KB");
-            }
+            if (n.bytes_received > 0) parts.push("odb: " + (n.bytes_received / 1024).toFixed(1) + " KB");
+            if (n.bytes_written > 0) parts.push("wys: " + (n.bytes_written / 1024).toFixed(1) + " KB");
             by.textContent = parts.length > 0 ? "(" + parts.join(" | ") + ")" : "";
         }
-        if (mp) {
-            mp.textContent = n.mountpoint ? "[" + n.mountpoint + "]" : "";
-        }
+        if (mp) mp.textContent = n.mountpoint ? "[" + n.mountpoint + "]" : "";
     }
 
     // === Polling (1 Hz) ===
@@ -359,7 +410,6 @@
         .then(function(res) {
             if (res.status === "ok") {
                 showProjectInfo(res.name, res.existing_points);
-                // Zamknij panel
                 projectOpen = false;
                 var panel = document.getElementById("project-panel");
                 if (panel) panel.classList.add("hidden");
@@ -383,7 +433,6 @@
             setText("project-current-name", "Projekt: " + name);
             setText("project-point-count", points + " pkt");
         }
-        // Odblokuj kontrolki pomiaru
         var input = document.getElementById("point-name");
         var btn = document.getElementById("btn-measure");
         if (input) input.disabled = false;
@@ -453,11 +502,11 @@
             measureActive = false;
             showMeasureProgress(false);
             showMeasureResult("Punkt '" + m.point_name + "' zapisany!", false);
-            // Wyczysc pole nazwy i odswierz licznik
             var input = document.getElementById("point-name");
             if (input) input.value = "";
             loadProjects();
             if (pointsOpen) loadPoints();
+            if (mapOpen) loadMapData();
         } else if (m.error && measureActive) {
             measureActive = false;
             showMeasureProgress(false);
@@ -471,7 +520,6 @@
             el.textContent = msg;
             el.className = "measure-result" + (isError ? " error" : "");
             el.classList.remove("hidden");
-            // Auto-ukryj po 5s
             setTimeout(function() { el.classList.add("hidden"); }, 5000);
         }
     }
@@ -479,18 +527,6 @@
     function hideMeasureResult() {
         var el = document.getElementById("measure-result");
         if (el) el.classList.add("hidden");
-    }
-
-    // === Init ===
-
-    function init() {
-        console.log("RTK Monitor: init");
-        setupNtripPanel();
-        setupMeasurePanel();
-        setupStakeoutPanel();
-        setupPointsPanel();
-        loadConfig();
-        startPolling();
     }
 
     // === Wytyczanie ===
@@ -559,7 +595,6 @@
     }
 
     function loadStakeoutSources() {
-        // Zaladuj punkty z projektu
         fetch("/api/points").then(function(r) { return r.json(); }).then(function(data) {
             var sel = document.getElementById("stakeout-project-point");
             if (sel && data.points) {
@@ -574,7 +609,6 @@
             }
         }).catch(function() {});
 
-        // Zaladuj pliki wytyczenia
         fetch("/api/stakeout/files").then(function(r) { return r.json(); }).then(function(data) {
             var sel = document.getElementById("stakeout-file");
             if (sel && data.files) {
@@ -755,13 +789,567 @@
                     "<td>" + p.name + "</td>" +
                     "<td>" + (p.x ? p.x.toFixed(3) : "-") + "</td>" +
                     "<td>" + (p.y ? p.y.toFixed(3) : "-") + "</td>" +
-                    "<td>" + (p.h ? p.h.toFixed(3) : "-") + "</td>";
+                    "<td>" + (p.h != null ? p.h.toFixed(3) : "-") + "</td>" +
+                    "<td>" + (p.antenna_h ? p.antenna_h.toFixed(2) : "-") + "</td>" +
+                    "<td>" + (p.acc_h ? p.acc_h.toFixed(4) : "-") + "</td>";
                 tbody.appendChild(tr);
             }
         }).catch(function() {});
     }
 
-    // Uruchom po zaladowaniu DOM
+    // ===================================================================
+    //  MAPA - Canvas z DXF overlay, pan/zoom, dotyk Android Chrome
+    // ===================================================================
+
+    var mapOpen = false;
+    var mapCanvas = null;
+    var mapCtx = null;
+    var mapPoints = [];
+    var mapDxfEntities = [];
+    var mapDxfLayers = {};  // layer -> bool (visible)
+    var mapCurrentDxf = "";
+
+    // View transform
+    var mapView = {
+        cx: 0, cy: 0,  // srodek widoku w ukladzie PL-2000
+        scale: 1,       // pikseli na metr
+        w: 580, h: 400
+    };
+
+    // Touch / mouse state
+    var mapDrag = { active: false, startX: 0, startY: 0, startCx: 0, startCy: 0 };
+    var mapPinch = { active: false, startDist: 0, startScale: 0 };
+
+    function setupMapPanel() {
+        var toggleBtn = document.getElementById("map-toggle");
+        if (toggleBtn) {
+            toggleBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                mapOpen = !mapOpen;
+                var cont = document.getElementById("map-container");
+                if (cont) {
+                    if (mapOpen) {
+                        cont.classList.remove("hidden");
+                        toggleBtn.textContent = "Ukryj";
+                        initMapCanvas();
+                        loadMapData();
+                    } else {
+                        cont.classList.add("hidden");
+                        toggleBtn.textContent = "Pokaz";
+                    }
+                }
+            });
+        }
+
+        // DXF select
+        var dxfSel = document.getElementById("map-dxf-select");
+        if (dxfSel) {
+            dxfSel.addEventListener("change", function() {
+                mapCurrentDxf = this.value;
+                if (mapCurrentDxf) {
+                    loadDxfFile(mapCurrentDxf);
+                } else {
+                    mapDxfEntities = [];
+                    drawMap();
+                }
+            });
+        }
+
+        // Upload DXF
+        var uploadBtn = document.getElementById("btn-upload-dxf");
+        var fileInput = document.getElementById("dxf-file-input");
+        if (uploadBtn && fileInput) {
+            uploadBtn.addEventListener("click", function() { fileInput.click(); });
+            fileInput.addEventListener("change", function() {
+                if (this.files.length > 0) uploadDxf(this.files[0]);
+            });
+        }
+
+        // Fit button
+        var fitBtn = document.getElementById("btn-map-fit");
+        if (fitBtn) {
+            fitBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                fitMapView();
+                drawMap();
+            });
+        }
+
+        // Show points checkbox
+        var showPts = document.getElementById("map-show-points");
+        if (showPts) {
+            showPts.addEventListener("change", function() { drawMap(); });
+        }
+    }
+
+    function initMapCanvas() {
+        mapCanvas = document.getElementById("map-canvas");
+        if (!mapCanvas) return;
+
+        // Dopasuj canvas do kontenera
+        var parent = mapCanvas.parentElement;
+        var w = parent.clientWidth - 4;
+        if (w < 200) w = 200;
+        mapCanvas.width = w;
+        mapCanvas.height = Math.min(400, Math.round(w * 0.7));
+        mapView.w = mapCanvas.width;
+        mapView.h = mapCanvas.height;
+
+        mapCtx = mapCanvas.getContext("2d");
+
+        // === Touch events (Android Chrome) ===
+        mapCanvas.addEventListener("touchstart", onMapTouchStart, { passive: false });
+        mapCanvas.addEventListener("touchmove", onMapTouchMove, { passive: false });
+        mapCanvas.addEventListener("touchend", onMapTouchEnd, { passive: false });
+
+        // === Mouse events (desktop) ===
+        mapCanvas.addEventListener("mousedown", onMapMouseDown);
+        mapCanvas.addEventListener("mousemove", onMapMouseMove);
+        mapCanvas.addEventListener("mouseup", onMapMouseUp);
+        mapCanvas.addEventListener("mouseleave", onMapMouseUp);
+        mapCanvas.addEventListener("wheel", onMapWheel, { passive: false });
+    }
+
+    // --- Touch handlers ---
+
+    function onMapTouchStart(e) {
+        e.preventDefault();
+        if (e.touches.length === 1) {
+            var t = e.touches[0];
+            mapDrag.active = true;
+            mapDrag.startX = t.clientX;
+            mapDrag.startY = t.clientY;
+            mapDrag.startCx = mapView.cx;
+            mapDrag.startCy = mapView.cy;
+        } else if (e.touches.length === 2) {
+            mapDrag.active = false;
+            mapPinch.active = true;
+            var dx = e.touches[0].clientX - e.touches[1].clientX;
+            var dy = e.touches[0].clientY - e.touches[1].clientY;
+            mapPinch.startDist = Math.sqrt(dx * dx + dy * dy);
+            mapPinch.startScale = mapView.scale;
+        }
+    }
+
+    function onMapTouchMove(e) {
+        e.preventDefault();
+        if (mapDrag.active && e.touches.length === 1) {
+            var t = e.touches[0];
+            var dx = t.clientX - mapDrag.startX;
+            var dy = t.clientY - mapDrag.startY;
+            // Na mapie: Y rosnie w gore (PL-2000 X=northing), ekran Y rosnie w dol
+            mapView.cx = mapDrag.startCx - dx / mapView.scale;
+            mapView.cy = mapDrag.startCy + dy / mapView.scale;
+            drawMap();
+        } else if (mapPinch.active && e.touches.length === 2) {
+            var dx2 = e.touches[0].clientX - e.touches[1].clientX;
+            var dy2 = e.touches[0].clientY - e.touches[1].clientY;
+            var dist = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+            var ratio = dist / mapPinch.startDist;
+            mapView.scale = Math.max(0.001, Math.min(1000, mapPinch.startScale * ratio));
+            drawMap();
+        }
+    }
+
+    function onMapTouchEnd(e) {
+        if (e.touches.length < 2) mapPinch.active = false;
+        if (e.touches.length < 1) mapDrag.active = false;
+    }
+
+    // --- Mouse handlers ---
+
+    function onMapMouseDown(e) {
+        mapDrag.active = true;
+        mapDrag.startX = e.clientX;
+        mapDrag.startY = e.clientY;
+        mapDrag.startCx = mapView.cx;
+        mapDrag.startCy = mapView.cy;
+    }
+
+    function onMapMouseMove(e) {
+        if (!mapDrag.active) {
+            // Pokaz wspolrzedne pod kursorem
+            showMapCoords(e);
+            return;
+        }
+        var dx = e.clientX - mapDrag.startX;
+        var dy = e.clientY - mapDrag.startY;
+        mapView.cx = mapDrag.startCx - dx / mapView.scale;
+        mapView.cy = mapDrag.startCy + dy / mapView.scale;
+        drawMap();
+    }
+
+    function onMapMouseUp() {
+        mapDrag.active = false;
+    }
+
+    function onMapWheel(e) {
+        e.preventDefault();
+        var factor = e.deltaY > 0 ? 0.85 : 1.18;
+        mapView.scale = Math.max(0.001, Math.min(1000, mapView.scale * factor));
+        drawMap();
+    }
+
+    function showMapCoords(e) {
+        var rect = mapCanvas.getBoundingClientRect();
+        var px = e.clientX - rect.left;
+        var py = e.clientY - rect.top;
+        // Konwertuj piksel -> PL-2000 (Y=easting na osi X ekranu, X=northing na osi Y ekranu odwroconej)
+        var worldY = mapView.cx + (px - mapView.w / 2) / mapView.scale;
+        var worldX = mapView.cy + (mapView.h / 2 - py) / mapView.scale;
+        var el = document.getElementById("map-coords");
+        if (el) el.textContent = "X:" + worldX.toFixed(1) + " Y:" + worldY.toFixed(1);
+    }
+
+    // --- Data loading ---
+
+    function loadMapData() {
+        fetch("/api/map/data")
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                mapPoints = data.points || [];
+
+                // Aktualizuj select DXF
+                var sel = document.getElementById("map-dxf-select");
+                if (sel) {
+                    var prev = sel.value;
+                    sel.innerHTML = '<option value="">-- DXF (brak) --</option>';
+                    if (data.dxf_files) {
+                        for (var i = 0; i < data.dxf_files.length; i++) {
+                            var o = document.createElement("option");
+                            o.value = data.dxf_files[i];
+                            o.textContent = data.dxf_files[i];
+                            sel.appendChild(o);
+                        }
+                    }
+                    if (prev) sel.value = prev;
+                }
+
+                // Dopasuj widok jesli pierwszy raz
+                if (mapView.scale === 1 && mapPoints.length > 0) {
+                    fitMapView();
+                }
+
+                drawMap();
+            })
+            .catch(function() {});
+    }
+
+    function loadDxfFile(filename) {
+        fetch("/api/map/dxf/" + encodeURIComponent(filename))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                mapDxfEntities = data.entities || [];
+                // Zbierz warstwy
+                mapDxfLayers = {};
+                for (var i = 0; i < mapDxfEntities.length; i++) {
+                    var layer = mapDxfEntities[i].layer || "0";
+                    if (!(layer in mapDxfLayers)) mapDxfLayers[layer] = true;
+                }
+                if (mapPoints.length === 0 && mapDxfEntities.length > 0) {
+                    fitMapView();
+                }
+                drawMap();
+            })
+            .catch(function() {});
+    }
+
+    function uploadDxf(file) {
+        var fd = new FormData();
+        fd.append("file", file);
+        fetch("/api/project/upload_dxf", { method: "POST", body: fd })
+            .then(function(r) { return r.json(); })
+            .then(function(res) {
+                if (res.status === "ok") {
+                    loadMapData();
+                } else {
+                    alert(res.message || "Blad wgrywania DXF");
+                }
+            })
+            .catch(function() { alert("Blad komunikacji"); });
+    }
+
+    // --- View fitting ---
+
+    function fitMapView() {
+        var xs = [], ys = [];
+
+        // Punkty projektu (Y=easting -> os X ekranu, X=northing -> os Y ekranu)
+        for (var i = 0; i < mapPoints.length; i++) {
+            var p = mapPoints[i];
+            if (p.y != null && p.x != null) {
+                xs.push(p.y);  // easting -> horizontal
+                ys.push(p.x);  // northing -> vertical
+            }
+        }
+
+        // DXF entities
+        for (var j = 0; j < mapDxfEntities.length; j++) {
+            var e = mapDxfEntities[j];
+            if (e.type === 'line') {
+                xs.push(e.y1, e.y2);
+                ys.push(e.x1, e.x2);
+            } else if (e.type === 'polyline' && e.points) {
+                for (var k = 0; k < e.points.length; k++) {
+                    xs.push(e.points[k][1]);
+                    ys.push(e.points[k][0]);
+                }
+            } else if (e.type === 'point' || e.type === 'text') {
+                xs.push(e.y);
+                ys.push(e.x);
+            } else if (e.type === 'circle' || e.type === 'arc') {
+                xs.push(e.cy - e.r, e.cy + e.r);
+                ys.push(e.cx - e.r, e.cx + e.r);
+            }
+        }
+
+        if (xs.length === 0) return;
+
+        var minX = Math.min.apply(null, xs);
+        var maxX = Math.max.apply(null, xs);
+        var minY = Math.min.apply(null, ys);
+        var maxY = Math.max.apply(null, ys);
+
+        var rangeX = maxX - minX || 10;
+        var rangeY = maxY - minY || 10;
+
+        // Dodaj margines 10%
+        var margin = 0.1;
+        rangeX *= (1 + margin * 2);
+        rangeY *= (1 + margin * 2);
+
+        mapView.cx = (minX + maxX) / 2;
+        mapView.cy = (minY + maxY) / 2;
+        mapView.scale = Math.min(mapView.w / rangeX, mapView.h / rangeY);
+    }
+
+    // --- Drawing ---
+
+    function drawMap() {
+        if (!mapCtx || !mapCanvas) return;
+        var ctx = mapCtx;
+        var w = mapView.w;
+        var h = mapView.h;
+
+        // Czyszczenie
+        ctx.fillStyle = "#0a1520";
+        ctx.fillRect(0, 0, w, h);
+
+        // Grid
+        drawMapGrid(ctx, w, h);
+
+        // DXF
+        if (mapDxfEntities.length > 0) {
+            drawDxfEntities(ctx, w, h);
+        }
+
+        // Punkty projektu
+        var showPts = document.getElementById("map-show-points");
+        if (showPts && showPts.checked && mapPoints.length > 0) {
+            drawMapPoints(ctx, w, h);
+        }
+
+        // Skala
+        drawMapScale(ctx, w, h);
+    }
+
+    function worldToScreen(worldY, worldX) {
+        // worldY = easting (PL-2000 Y) -> ekranowa os X
+        // worldX = northing (PL-2000 X) -> ekranowa os Y (odwrocona)
+        var sx = (worldY - mapView.cx) * mapView.scale + mapView.w / 2;
+        var sy = mapView.h / 2 - (worldX - mapView.cy) * mapView.scale;
+        return [sx, sy];
+    }
+
+    function drawMapGrid(ctx, w, h) {
+        // Oblicz odpowiedni krok siatki
+        var pixPerMeter = mapView.scale;
+        var steps = [0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 5000];
+        var gridStep = 100;
+        for (var i = 0; i < steps.length; i++) {
+            if (steps[i] * pixPerMeter > 40) {
+                gridStep = steps[i];
+                break;
+            }
+        }
+
+        // Zakres widoczny
+        var halfW = w / 2 / pixPerMeter;
+        var halfH = h / 2 / pixPerMeter;
+        var left = mapView.cx - halfW;
+        var right = mapView.cx + halfW;
+        var bottom = mapView.cy - halfH;
+        var top = mapView.cy + halfH;
+
+        ctx.strokeStyle = "rgba(255,255,255,0.06)";
+        ctx.lineWidth = 1;
+
+        // Pionowe (easting)
+        var startE = Math.floor(left / gridStep) * gridStep;
+        for (var e = startE; e <= right; e += gridStep) {
+            var sx = (e - mapView.cx) * pixPerMeter + w / 2;
+            ctx.beginPath();
+            ctx.moveTo(sx, 0);
+            ctx.lineTo(sx, h);
+            ctx.stroke();
+        }
+
+        // Poziome (northing)
+        var startN = Math.floor(bottom / gridStep) * gridStep;
+        for (var n = startN; n <= top; n += gridStep) {
+            var sy = h / 2 - (n - mapView.cy) * pixPerMeter;
+            ctx.beginPath();
+            ctx.moveTo(0, sy);
+            ctx.lineTo(w, sy);
+            ctx.stroke();
+        }
+    }
+
+    function drawMapPoints(ctx, w, h) {
+        for (var i = 0; i < mapPoints.length; i++) {
+            var p = mapPoints[i];
+            if (p.x == null || p.y == null) continue;
+
+            var pos = worldToScreen(p.y, p.x);
+            var sx = pos[0], sy = pos[1];
+
+            // Poza ekranem?
+            if (sx < -20 || sx > w + 20 || sy < -20 || sy > h + 20) continue;
+
+            // Punkt
+            ctx.fillStyle = "#4fc3f7";
+            ctx.beginPath();
+            ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Obwodka
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            // Etykieta
+            ctx.fillStyle = "#e0e8f0";
+            ctx.font = "11px sans-serif";
+            ctx.textAlign = "left";
+            ctx.fillText(p.name || p.id, sx + 8, sy - 4);
+        }
+    }
+
+    function drawDxfEntities(ctx, w, h) {
+        ctx.strokeStyle = "#ffa726";
+        ctx.lineWidth = 1;
+        ctx.fillStyle = "#ffa726";
+
+        for (var i = 0; i < mapDxfEntities.length; i++) {
+            var e = mapDxfEntities[i];
+            var layer = e.layer || "0";
+            if (mapDxfLayers[layer] === false) continue;
+
+            if (e.type === 'line') {
+                var p1 = worldToScreen(e.y1, e.x1);
+                var p2 = worldToScreen(e.y2, e.x2);
+                ctx.beginPath();
+                ctx.moveTo(p1[0], p1[1]);
+                ctx.lineTo(p2[0], p2[1]);
+                ctx.stroke();
+            } else if (e.type === 'polyline' && e.points && e.points.length > 1) {
+                ctx.beginPath();
+                var first = worldToScreen(e.points[0][1], e.points[0][0]);
+                ctx.moveTo(first[0], first[1]);
+                for (var j = 1; j < e.points.length; j++) {
+                    var pt = worldToScreen(e.points[j][1], e.points[j][0]);
+                    ctx.lineTo(pt[0], pt[1]);
+                }
+                if (e.closed) ctx.closePath();
+                ctx.stroke();
+            } else if (e.type === 'point') {
+                var pp = worldToScreen(e.y, e.x);
+                ctx.beginPath();
+                ctx.arc(pp[0], pp[1], 3, 0, Math.PI * 2);
+                ctx.fill();
+            } else if (e.type === 'circle') {
+                var cc = worldToScreen(e.cy, e.cx);
+                var rPx = e.r * mapView.scale;
+                if (rPx > 0.5 && rPx < 5000) {
+                    ctx.beginPath();
+                    ctx.arc(cc[0], cc[1], rPx, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+            } else if (e.type === 'arc') {
+                var ac = worldToScreen(e.cy, e.cx);
+                var arPx = e.r * mapView.scale;
+                if (arPx > 0.5 && arPx < 5000) {
+                    var sa = -e.end_angle * Math.PI / 180;
+                    var ea = -e.start_angle * Math.PI / 180;
+                    ctx.beginPath();
+                    ctx.arc(ac[0], ac[1], arPx, sa, ea);
+                    ctx.stroke();
+                }
+            } else if (e.type === 'text') {
+                var tp = worldToScreen(e.y, e.x);
+                var fontSize = Math.max(8, Math.min(14, e.height * mapView.scale));
+                ctx.font = fontSize + "px sans-serif";
+                ctx.fillStyle = "#ffa726";
+                ctx.textAlign = "left";
+                ctx.fillText(e.text, tp[0], tp[1]);
+            }
+        }
+    }
+
+    function drawMapScale(ctx, w, h) {
+        // Belka skali w lewym dolnym rogu
+        var pixPerMeter = mapView.scale;
+        var targetPx = 100;
+        var dist = targetPx / pixPerMeter;
+
+        // Zaokraglij do ladnej wartosci
+        var niceVals = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
+        var niceDist = niceVals[niceVals.length - 1];
+        for (var i = 0; i < niceVals.length; i++) {
+            if (niceVals[i] >= dist * 0.5) {
+                niceDist = niceVals[i];
+                break;
+            }
+        }
+        var barPx = niceDist * pixPerMeter;
+
+        var x0 = 10, y0 = h - 12;
+        ctx.strokeStyle = "#8899aa";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x0 + barPx, y0);
+        ctx.moveTo(x0, y0 - 4);
+        ctx.lineTo(x0, y0 + 4);
+        ctx.moveTo(x0 + barPx, y0 - 4);
+        ctx.lineTo(x0 + barPx, y0 + 4);
+        ctx.stroke();
+
+        ctx.fillStyle = "#8899aa";
+        ctx.font = "10px sans-serif";
+        ctx.textAlign = "center";
+        var label = niceDist >= 1000 ? (niceDist / 1000) + " km" : niceDist + " m";
+        ctx.fillText(label, x0 + barPx / 2, y0 - 6);
+
+        // Info skali
+        var scaleEl = document.getElementById("map-scale");
+        if (scaleEl) scaleEl.textContent = "1px = " + (1 / pixPerMeter).toFixed(2) + " m";
+    }
+
+    // === Init ===
+
+    function init() {
+        console.log("RTK Monitor: init");
+        setupNtripPanel();
+        setupMeasurePanel();
+        setupAntennaHeight();
+        setupStakeoutPanel();
+        setupPointsPanel();
+        setupMapPanel();
+        loadConfig();
+        startPolling();
+    }
+
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", init);
     } else {

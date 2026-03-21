@@ -2,14 +2,17 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>RTK Monitor</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <header>
         <h1>RTK Monitor</h1>
-        <div id="connection-status" class="status-dot disconnected" title="WebSocket">&#9679;</div>
+        <div class="header-right">
+            <span id="cpu-temp" class="cpu-temp" title="Temperatura CPU"></span>
+            <div id="connection-status" class="status-dot disconnected" title="Polling">&#9679;</div>
+        </div>
     </header>
 
     <main>
@@ -18,6 +21,10 @@
             <div class="fix-details">
                 <span id="satellites">0/0 sat</span>
                 <span id="diff-age"></span>
+            </div>
+            <div id="accuracy-display" class="accuracy-display hidden">
+                <span id="acc-h" title="Dokladnosc pozioma (2-sigma, 95%)"></span>
+                <span id="acc-v" title="Dokladnosc wysokosciowa (2-sigma, 95%)"></span>
             </div>
         </section>
 
@@ -108,6 +115,14 @@
             <div id="project-info" class="project-info hidden">
                 <span id="project-current-name"></span>
                 <span id="project-point-count"></span>
+            </div>
+
+            <!-- Wysokosc anteny -->
+            <div class="antenna-height-row">
+                <label>Wys. anteny:</label>
+                <input type="number" id="antenna-height" step="0.001" min="0" max="10" placeholder="0.000" inputmode="decimal">
+                <span>m</span>
+                <button class="btn-small" id="btn-save-antenna">Zapisz</button>
             </div>
 
             <div id="measure-controls" class="measure-controls">
@@ -209,17 +224,45 @@
             </div>
         </section>
 
+        <!-- Podglad mapy -->
+        <section class="card map-card">
+            <h2>Mapa
+                <button id="map-toggle" class="btn-small">Pokaz</button>
+            </h2>
+            <div id="map-container" class="hidden">
+                <div class="map-controls">
+                    <label class="map-checkbox"><input type="checkbox" id="map-show-points" checked> Punkty</label>
+                    <select id="map-dxf-select">
+                        <option value="">-- DXF (brak) --</option>
+                    </select>
+                    <button class="btn-small" id="btn-upload-dxf" title="Wgraj DXF">+ DXF</button>
+                    <input type="file" id="dxf-file-input" accept=".dxf" style="display:none">
+                    <button class="btn-small" id="btn-map-fit" title="Dopasuj widok">Dopasuj</button>
+                </div>
+                <canvas id="map-canvas" width="580" height="400"></canvas>
+                <div class="map-info">
+                    <span id="map-coords"></span>
+                    <span id="map-scale"></span>
+                </div>
+            </div>
+        </section>
+
         <section class="card points-card">
             <h2>Pomierzone punkty
                 <button id="points-toggle" class="btn-small">Pokaz</button>
             </h2>
             <div id="points-table-wrap" class="hidden">
-                <table id="points-table" class="points-table">
-                    <thead>
-                        <tr><th>Nr</th><th>Nazwa</th><th>X</th><th>Y</th><th>H</th></tr>
-                    </thead>
-                    <tbody id="points-tbody"></tbody>
-                </table>
+                <div class="points-table-scroll">
+                    <table id="points-table" class="points-table">
+                        <thead>
+                            <tr>
+                                <th>Nr</th><th>Nazwa</th><th>X</th><th>Y</th><th>H</th>
+                                <th>Ant.</th><th>Dokl. H</th>
+                            </tr>
+                        </thead>
+                        <tbody id="points-tbody"></tbody>
+                    </table>
+                </div>
                 <div id="points-empty" class="points-empty">Brak pomierzonych punktow</div>
             </div>
         </section>

@@ -422,6 +422,7 @@ def start_measurement():
     result = surveyor.start_measurement(
         point_name=data['point_name'],
         required_samples=data.get('samples', 10),
+        forced=bool(data.get('forced', False)),
     )
     return jsonify(result)
 
@@ -477,6 +478,23 @@ def stakeout_stop():
     stakeout_target['active'] = False
     stakeout_target['name'] = None
     return jsonify({'status': 'ok'})
+
+
+@app.route('/api/stakeout/save_point', methods=['POST'])
+def stakeout_save_point():
+    """Zapisz punkt wytyczania do projektu."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'status': 'error', 'message': 'Brak danych'}), 400
+    try:
+        name = data.get('name', '?')
+        x = float(data['x'])
+        y = float(data['y'])
+        h = float(data['h']) if data.get('h') not in (None, '', 'null') else None
+        result = surveyor.save_reference_point(name, x, y, h)
+        return jsonify(result)
+    except (KeyError, ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
 
 
 # === Mapa / DXF ===

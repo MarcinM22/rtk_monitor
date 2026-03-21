@@ -303,6 +303,34 @@ footer {
 .btn-measure:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
 .btn-measure:not(:disabled):active { opacity: 0.8; }
 
+/* Wymuszony pomiar */
+.force-row { margin-top: 6px; }
+.btn-force-measure {
+    padding: 7px 14px;
+    border: 1px solid var(--red);
+    border-radius: 8px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    background: rgba(239,83,80,0.1);
+    color: var(--red);
+    width: 100%;
+}
+.btn-force-measure:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-force-measure:not(:disabled):active { background: rgba(239,83,80,0.3); }
+
+/* Wymuszony punkt - czerwony wiersz */
+.points-table tr.forced-row { color: var(--red); }
+.points-table tr.forced-row td:last-child { font-weight: 700; }
+.points-table tr.ref-row { color: var(--text-dim); font-style: italic; }
+
+/* Zapisz punkt referencyjny */
+.btn-save-ref {
+    background: rgba(102,187,106,0.15);
+    color: var(--green);
+    border: 1px solid var(--green);
+}
+
 .project-info {
     font-size: 0.85rem;
     color: var(--accent);

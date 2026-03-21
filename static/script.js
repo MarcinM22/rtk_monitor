@@ -363,7 +363,7 @@
         if (measureBtn) {
             measureBtn.addEventListener("click", function(e) {
                 e.preventDefault();
-                startMeasurement();
+                startMeasurement(false);
             });
         }
 
@@ -372,6 +372,15 @@
             cancelBtn.addEventListener("click", function(e) {
                 e.preventDefault();
                 cancelMeasurement();
+            });
+        }
+
+        // Wymuszony pomiar
+        var forceBtn = document.getElementById("btn-force-measure");
+        if (forceBtn) {
+            forceBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                startMeasurement(true);
             });
         }
     }
@@ -438,11 +447,13 @@
         }
         var input = document.getElementById("point-name");
         var btn = document.getElementById("btn-measure");
+        var forceBtn2 = document.getElementById("btn-force-measure");
         if (input) input.disabled = false;
         if (btn) btn.disabled = false;
+        if (forceBtn2) forceBtn2.disabled = false;
     }
 
-    function startMeasurement() {
+    function startMeasurement(forced) {
         var pointName = getVal("point-name");
         if (!pointName) {
             var input = document.getElementById("point-name");
@@ -450,10 +461,14 @@
             return;
         }
 
+        if (forced && !confirm("UWAGA: Pomiar wymuszony (bez RTK Fixed) bedzie miał obnizona dokladnosc. Kontynuowac?")) {
+            return;
+        }
+
         fetch("/api/measure/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ point_name: pointName, samples: 10 })
+            body: JSON.stringify({ point_name: pointName, samples: 10, forced: !!forced })
         })
         .then(function(r) { return r.json(); })
         .then(function(res) {
@@ -497,8 +512,12 @@
             showMeasureProgress(true);
             var pct = Math.round((m.progress / m.required) * 100);
             var fill = document.getElementById("progress-fill");
-            if (fill) fill.style.width = pct + "%";
-            var txt = m.progress + "/" + m.required + " probek RTK Fixed";
+            if (fill) {
+                fill.style.width = pct + "%";
+                fill.style.background = m.forced ? "var(--red)" : "var(--green)";
+            }
+            var txt = m.progress + "/" + m.required;
+            txt += m.forced ? " probek (WYMUSZONY)" : " probek RTK Fixed";
             if (m.rejected > 0) txt += " (odrzucone: " + m.rejected + ")";
             setText("measure-status-text", txt);
         } else if (m.done && measureActive) {
@@ -581,6 +600,15 @@
             stopBtn.addEventListener("click", function(e) {
                 e.preventDefault();
                 stopStakeout();
+            });
+        }
+
+        // Zapisz punkt wytyczania do projektu
+        var saveBtn = document.getElementById("btn-stakeout-save");
+        if (saveBtn) {
+            saveBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                saveStakeoutPoint();
             });
         }
     }
@@ -693,6 +721,48 @@
         if (disp) disp.classList.add("hidden");
     }
 
+    function saveStakeoutPoint() {
+        var src = getVal("stakeout-source");
+        var target = null;
+
+        if (src === "manual") {
+            var name = getVal("stakeout-name") || "Reczny";
+            var x = parseFloat(getVal("stakeout-x"));
+            var y = parseFloat(getVal("stakeout-y"));
+            var h = getVal("stakeout-h") ? parseFloat(getVal("stakeout-h")) : null;
+            if (isNaN(x) || isNaN(y)) { alert("Podaj X i Y"); return; }
+            target = {name: name, x: x, y: y, h: h};
+        } else if (src === "project") {
+            var val = getVal("stakeout-project-point");
+            if (!val) { alert("Wybierz punkt"); return; }
+            target = JSON.parse(val);
+        } else if (src === "file") {
+            var val2 = getVal("stakeout-file-point");
+            if (!val2) { alert("Wybierz punkt"); return; }
+            target = JSON.parse(val2);
+        }
+
+        if (!target) return;
+
+        fetch("/api/stakeout/save_point", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(target)
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(res) {
+            if (res.status === "ok") {
+                alert(res.message);
+                loadProjects();
+                if (pointsOpen) loadPoints();
+                if (mapOpen) loadMapData();
+            } else {
+                alert(res.message || "Blad");
+            }
+        })
+        .catch(function() { alert("Blad komunikacji"); });
+    }
+
     function updateStakeout(s) {
         var disp = document.getElementById("stakeout-display");
         if (!s || !s.active) {
@@ -788,13 +858,21 @@
             for (var i = 0; i < data.points.length; i++) {
                 var p = data.points[i];
                 var tr = document.createElement("tr");
+                var isForced = p.forced;
+                var isRef = (p.antenna_h === undefined && !p.lat && !p.lon);
+                if (isForced) tr.className = "forced-row";
+                else if (isRef) tr.className = "ref-row";
+                var flagTd = "";
+                if (isForced) flagTd = '<span style="color:var(--red)" title="Pomiar wymuszony">&#9888;</span>';
+                else if (isRef) flagTd = '<span title="Punkt referencyjny">REF</span>';
                 tr.innerHTML = "<td>" + p.id + "</td>" +
                     "<td>" + p.name + "</td>" +
                     "<td>" + (p.x ? p.x.toFixed(3) : "-") + "</td>" +
                     "<td>" + (p.y ? p.y.toFixed(3) : "-") + "</td>" +
                     "<td>" + (p.h != null ? p.h.toFixed(3) : "-") + "</td>" +
                     "<td>" + (p.antenna_h ? p.antenna_h.toFixed(2) : "-") + "</td>" +
-                    "<td>" + (p.acc_h ? p.acc_h.toFixed(4) : "-") + "</td>";
+                    "<td>" + (p.acc_h ? p.acc_h.toFixed(4) : "-") + "</td>" +
+                    "<td>" + flagTd + "</td>";
                 tbody.appendChild(tr);
             }
         }).catch(function() {});
@@ -877,12 +955,22 @@
             });
         }
 
-        // Fit all button
+        // Fit DXF button
         var fitBtn = document.getElementById("btn-map-fit");
         if (fitBtn) {
             fitBtn.addEventListener("click", function(e) {
                 e.preventDefault();
-                fitMapView(false);
+                fitMapView('dxf');
+                drawMap();
+            });
+        }
+
+        // Fit ALL button
+        var fitAllBtn = document.getElementById("btn-map-fit-all");
+        if (fitAllBtn) {
+            fitAllBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                fitMapView('all');
                 drawMap();
             });
         }
@@ -1128,7 +1216,7 @@
                 }
 
                 if (!mapView.initialized && mapPoints.length > 0) {
-                    fitMapView(false);
+                    fitMapView('all');
                     mapView.initialized = true;
                 }
 
@@ -1148,7 +1236,7 @@
                     if (!(layer in mapDxfLayers)) mapDxfLayers[layer] = true;
                 }
                 if (!mapView.initialized && mapDxfEntities.length > 0) {
-                    fitMapView(false);
+                    fitMapView('dxf');
                     mapView.initialized = true;
                 }
                 drawMap();
@@ -1169,36 +1257,46 @@
     }
 
     // --- View fitting ---
-    function fitMapView(includeGps) {
+    // mode: 'dxf' = only DXF, 'all' = everything
+    function fitMapView(mode) {
         var xs = [], ys = [];
+        var includeDxf = (mode === 'dxf' || mode === 'all');
+        var includePoints = (mode === 'all');
+        var includeGps = (mode === 'all');
+        var includeStakeout = (mode === 'all');
 
-        for (var i = 0; i < mapPoints.length; i++) {
-            var p = mapPoints[i];
-            if (p.y != null && p.x != null) {
-                xs.push(p.y);
-                ys.push(p.x);
-            }
-        }
-
-        for (var j = 0; j < mapDxfEntities.length; j++) {
-            var e = mapDxfEntities[j];
-            if (e.type === 'line') {
-                xs.push(e.y1, e.y2); ys.push(e.x1, e.x2);
-            } else if (e.type === 'polyline' && e.points) {
-                for (var k = 0; k < e.points.length; k++) {
-                    xs.push(e.points[k][1]); ys.push(e.points[k][0]);
+        if (includePoints) {
+            for (var i = 0; i < mapPoints.length; i++) {
+                var p = mapPoints[i];
+                if (p.y != null && p.x != null) {
+                    xs.push(p.y); ys.push(p.x);
                 }
-            } else if (e.type === 'point' || e.type === 'text') {
-                xs.push(e.y); ys.push(e.x);
-            } else if (e.type === 'circle' || e.type === 'arc') {
-                xs.push(e.cy - e.r, e.cy + e.r); ys.push(e.cx - e.r, e.cx + e.r);
             }
         }
 
-        // Uwzglednij GPS jesli wlaczone
-        if (includeGps !== false && mapCurrentPos.x != null) {
-            xs.push(mapCurrentPos.y);
-            ys.push(mapCurrentPos.x);
+        if (includeDxf) {
+            for (var j = 0; j < mapDxfEntities.length; j++) {
+                var e = mapDxfEntities[j];
+                if (e.type === 'line') {
+                    xs.push(e.x1, e.x2); ys.push(e.y1, e.y2);
+                } else if (e.type === 'polyline' && e.points) {
+                    for (var k = 0; k < e.points.length; k++) {
+                        xs.push(e.points[k][0]); ys.push(e.points[k][1]);
+                    }
+                } else if (e.type === 'point' || e.type === 'text') {
+                    xs.push(e.x); ys.push(e.y);
+                } else if (e.type === 'circle' || e.type === 'arc') {
+                    xs.push(e.cx - e.r, e.cx + e.r); ys.push(e.cy - e.r, e.cy + e.r);
+                }
+            }
+        }
+
+        if (includeGps && mapCurrentPos.x != null) {
+            xs.push(mapCurrentPos.y); ys.push(mapCurrentPos.x);
+        }
+
+        if (includeStakeout && mapStakeoutTarget.active && mapStakeoutTarget.x != null) {
+            xs.push(mapStakeoutTarget.y); ys.push(mapStakeoutTarget.x);
         }
 
         if (xs.length === 0) return;
@@ -1395,31 +1493,33 @@
             var layer = e.layer || "0";
             if (mapDxfLayers[layer] === false) continue;
 
+            // DXF: e.x1=code10=easting(Y_PL), e.y1=code20=northing(X_PL)
+            // worldToScreen(easting, northing)
             if (e.type === 'line') {
-                var p1 = worldToScreen(e.y1, e.x1);
-                var p2 = worldToScreen(e.y2, e.x2);
+                var p1 = worldToScreen(e.x1, e.y1);
+                var p2 = worldToScreen(e.x2, e.y2);
                 ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
             } else if (e.type === 'polyline' && e.points && e.points.length > 1) {
                 ctx.beginPath();
-                var first = worldToScreen(e.points[0][1], e.points[0][0]);
+                var first = worldToScreen(e.points[0][0], e.points[0][1]);
                 ctx.moveTo(first[0], first[1]);
                 for (var j = 1; j < e.points.length; j++) {
-                    var pt = worldToScreen(e.points[j][1], e.points[j][0]);
+                    var pt = worldToScreen(e.points[j][0], e.points[j][1]);
                     ctx.lineTo(pt[0], pt[1]);
                 }
                 if (e.closed) ctx.closePath();
                 ctx.stroke();
             } else if (e.type === 'point') {
-                var pp = worldToScreen(e.y, e.x);
+                var pp = worldToScreen(e.x, e.y);
                 ctx.beginPath(); ctx.arc(pp[0], pp[1], 3, 0, Math.PI * 2); ctx.fill();
             } else if (e.type === 'circle') {
-                var cc = worldToScreen(e.cy, e.cx);
+                var cc = worldToScreen(e.cx, e.cy);
                 var rPx = e.r * mapView.scale;
                 if (rPx > 0.5 && rPx < 5000) {
                     ctx.beginPath(); ctx.arc(cc[0], cc[1], rPx, 0, Math.PI * 2); ctx.stroke();
                 }
             } else if (e.type === 'arc') {
-                var ac = worldToScreen(e.cy, e.cx);
+                var ac = worldToScreen(e.cx, e.cy);
                 var arPx = e.r * mapView.scale;
                 if (arPx > 0.5 && arPx < 5000) {
                     var sa = -e.end_angle * Math.PI / 180;
@@ -1427,7 +1527,7 @@
                     ctx.beginPath(); ctx.arc(ac[0], ac[1], arPx, sa, ea); ctx.stroke();
                 }
             } else if (e.type === 'text') {
-                var tp = worldToScreen(e.y, e.x);
+                var tp = worldToScreen(e.x, e.y);
                 var fontSize = Math.max(8, Math.min(14, e.height * mapView.scale));
                 ctx.font = fontSize + "px sans-serif";
                 ctx.fillStyle = "#ffa726";
@@ -1465,7 +1565,21 @@
         ctx.fillText(label, x0 + barPx / 2, y0 - 6);
 
         var scaleEl = document.getElementById("map-scale");
-        if (scaleEl) scaleEl.textContent = "1px = " + (1 / pixPerMeter).toFixed(2) + " m";
+        if (scaleEl) {
+            // Skala kartograficzna: 1 piksel ~0.264mm (96 DPI)
+            var pixSizeM = 0.000264;
+            var scaleDenom = Math.round(1 / (pixPerMeter * pixSizeM));
+            // Zaokraglij do ladnej wartosci
+            var niceScales = [100, 250, 500, 1000, 2000, 2500, 5000, 10000, 25000, 50000, 100000];
+            var niceScale = scaleDenom;
+            for (var ns = 0; ns < niceScales.length; ns++) {
+                if (niceScales[ns] >= scaleDenom * 0.7) {
+                    niceScale = niceScales[ns];
+                    break;
+                }
+            }
+            scaleEl.textContent = "~1:" + niceScale;
+        }
     }
 
     // === Init ===

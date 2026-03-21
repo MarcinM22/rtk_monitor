@@ -24,10 +24,11 @@ logger = logging.getLogger(__name__)
 class Measurement:
     """Pojedynszy pomiar punktu (kolekcja probek)."""
 
-    def __init__(self, point_name, required_samples=10, min_fix_quality=4):
+    def __init__(self, point_name, required_samples=10, min_fix_quality=4, forced=False):
         self.point_name = point_name
         self.required_samples = required_samples
         self.min_fix_quality = min_fix_quality
+        self.forced = forced  # pomiar wymuszony (bez RTK Fixed)
 
         self.samples = []
         self.started_at = datetime.now()
@@ -198,7 +199,7 @@ class Surveyor:
                     'ID', 'Nazwa',
                     'X_PL2000', 'Y_PL2000', 'H_EVRF2007',
                     'Lat_WGS84', 'Lon_WGS84', 'H_elips',
-                    'Wys_anteny', 'Dokl_poziom', 'Dokl_pion'
+                    'Wys_anteny', 'Dokl_poziom', 'Dokl_pion', 'Uwagi'
                 ])
 
         if not os.path.exists(report_path):
@@ -254,8 +255,10 @@ class Surveyor:
 
     # === Pomiar ===
 
-    def start_measurement(self, point_name, required_samples=10):
-        """Rozpocznij pomiar nowego punktu."""
+    def start_measurement(self, point_name, required_samples=10, forced=False):
+        """Rozpocznij pomiar nowego punktu.
+        forced=True: akceptuj dowolny fix (nie tylko RTK Fixed).
+        """
         with self._lock:
             if self._current_measurement and self._current_measurement.is_running:
                 return {'status': 'error', 'message': 'Pomiar juz trwa'}
@@ -266,10 +269,14 @@ class Surveyor:
             if not point_name or not point_name.strip():
                 return {'status': 'error', 'message': 'Podaj nazwe punktu'}
 
+            # Wymuszony: akceptuj jakikolwiek fix >= 1 (GPS Fix)
+            min_fq = 1 if forced else 4
+
             self._current_measurement = Measurement(
                 point_name=point_name.strip(),
                 required_samples=required_samples,
-                min_fix_quality=4,
+                min_fix_quality=min_fq,
+                forced=forced,
             )
             self._current_measurement.start()
 
@@ -306,6 +313,7 @@ class Surveyor:
                 'required': m.required_samples,
                 'rejected': m.rejected,
                 'error': m.error,
+                'forced': m.forced,
             }
 
     def _collect_loop(self):
@@ -369,6 +377,7 @@ class Surveyor:
             'duration_s': avg['duration_s'],
             'height_method': conv['height_method'],
             'antenna_height': self.antenna_height,
+            'forced': m.forced,
         }
 
         self._save_to_csv(result)
@@ -399,6 +408,7 @@ class Surveyor:
                     "%.3f" % result['antenna_height'],
                     "%.4f" % result['std_horizontal_m'] if result['std_horizontal_m'] else '',
                     "%.4f" % result['std_alt'] if result['std_alt'] is not None else '',
+                    'WYMUSZONY' if result.get('forced') else '',
                 ])
             logger.info("CSV: punkt #%d zapisany do %s", result['point_id'], csv_path)
         except Exception as e:
@@ -413,6 +423,8 @@ class Surveyor:
             with open(report_path, 'a', encoding='utf-8') as f:
                 f.write("-" * 70 + "\n")
                 f.write("  Punkt #%d: %s\n" % (result['point_id'], result['point_name']))
+                if result.get('forced'):
+                    f.write("  *** POMIAR WYMUSZONY (bez RTK Fixed) ***\n")
                 f.write("-" * 70 + "\n")
                 f.write("  Czas pomiaru:  %s -> %s\n" % (avg['started_at'], avg['finished_at']))
                 f.write("  Czas trwania:  %.1f s\n" % (avg['duration_s'] or 0))
@@ -487,6 +499,8 @@ class Surveyor:
                             pt['acc_h'] = float(row[9])
                         if len(row) > 10 and row[10]:
                             pt['acc_v'] = float(row[10])
+                        if len(row) > 11 and row[11]:
+                            pt['forced'] = True
                         points.append(pt)
                     except (ValueError, IndexError):
                         continue
@@ -587,6 +601,33 @@ class Surveyor:
             result['dist3d'] = round(math.sqrt(dN * dN + dE * dE + dH * dH), 3)
 
         return result
+
+    # === DXF ===
+
+    def save_reference_point(self, name, x, y, h=None):
+        """Zapisz punkt referencyjny (np. z wytyczania) do CSV projektu.
+        Punkt nie pochodzi z pomiaru GPS - zapis bez lat/lon/h_elips.
+        """
+        if not self._current_project:
+            return {'status': 'error', 'message': 'Najpierw otworz projekt'}
+        csv_path = self._current_project['csv_path']
+        self._point_counter += 1
+        point_id = self._point_counter
+        try:
+            with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f, delimiter=';')
+                writer.writerow([
+                    point_id, name,
+                    "%.3f" % x if x else '',
+                    "%.3f" % y if y else '',
+                    "%.3f" % h if h is not None else '',
+                    '', '', '', '', '', '', 'REF',
+                ])
+            logger.info("Punkt referencyjny #%d '%s' zapisany", point_id, name)
+            return {'status': 'ok', 'message': 'Punkt %s zapisany (#%d)' % (name, point_id)}
+        except Exception as e:
+            logger.error("Blad zapisu punktu ref: %s", e)
+            return {'status': 'error', 'message': str(e)}
 
     # === DXF ===
 

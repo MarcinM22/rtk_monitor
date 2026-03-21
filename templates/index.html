@@ -130,6 +130,9 @@
                     <input type="text" id="point-name" placeholder="Nazwa punktu" disabled>
                     <button class="btn btn-measure" id="btn-measure" disabled>Zapisz punkt</button>
                 </div>
+                <div class="input-row force-row">
+                    <button class="btn btn-force-measure" id="btn-force-measure" disabled title="Pomiar bez RTK Fixed - niska dokladnosc!">Wymusz pomiar</button>
+                </div>
             </div>
 
             <div id="measure-progress" class="measure-progress hidden">
@@ -198,6 +201,7 @@
                 <div class="form-actions">
                     <button class="btn btn-primary" id="btn-stakeout-start">Wytyczaj</button>
                     <button class="btn btn-danger" id="btn-stakeout-stop">Stop</button>
+                    <button class="btn btn-save-ref" id="btn-stakeout-save" title="Zapisz punkt do projektu">Zapisz pkt</button>
                 </div>
             </div>
 
@@ -237,9 +241,10 @@
                     </select>
                     <button class="btn-small" id="btn-upload-dxf" title="Wgraj DXF">+ DXF</button>
                     <input type="file" id="dxf-file-input" accept=".dxf" style="display:none">
-                    <button class="btn-small" id="btn-map-fit" title="Dopasuj widok do danych">Dopasuj</button>
+                    <button class="btn-small" id="btn-map-fit" title="Dopasuj widok do DXF">Dopasuj DXF</button>
+                    <button class="btn-small" id="btn-map-fit-all" title="Dopasuj widok do wszystkich danych">Dopasuj wszystko</button>
                     <button class="btn-small btn-map-gps" id="btn-map-goto-gps" title="Przejdz do pozycji GPS">&#9678; GPS</button>
-                    <button class="btn-small btn-map-stake" id="btn-map-fit-work" title="Widok: pozycja + cel wytyczania">&#8644; Praca</button>
+                    <button class="btn-small btn-map-stake" id="btn-map-fit-work" title="Widok: pozycja + cel wytyczania">&#8644; Wytyczanie</button>
                 </div>
                 <canvas id="map-canvas" width="580" height="400"></canvas>
                 <div class="map-info">
@@ -259,7 +264,7 @@
                         <thead>
                             <tr>
                                 <th>Nr</th><th>Nazwa</th><th>X</th><th>Y</th><th>H</th>
-                                <th>Ant.</th><th>Dokl. H</th>
+                                <th>Ant.</th><th>Dokl. H</th><th></th>
                             </tr>
                         </thead>
                         <tbody id="points-tbody"></tbody>

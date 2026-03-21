@@ -9,8 +9,9 @@ import sys
 import json
 import signal
 import logging
+import subprocess
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_from_directory
 
 from gps_reader import GPSReader
 from ntrip_client import NTRIPClient, build_mountpoint
@@ -27,6 +28,9 @@ logger = logging.getLogger(__name__)
 # --- Konfiguracja ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
+
+# Projekty przechowywane POZA aplikacja (przetrwaja reinstalacje)
+PROJECTS_DIR = os.path.expanduser('~/rtk_projekty')
 
 DEFAULT_NTRIP = {
     'host': 'system.asgeupos.pl',
@@ -47,6 +51,7 @@ def load_config():
         'gps_port': None,
         'gps_baudrate': 115200,
         'ntrip': dict(DEFAULT_NTRIP),
+        'antenna_height': 0.0,
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -58,6 +63,8 @@ def load_config():
                 cfg['gps_port'] = saved['gps_port']
             if 'gps_baudrate' in saved:
                 cfg['gps_baudrate'] = saved['gps_baudrate']
+            if 'antenna_height' in saved:
+                cfg['antenna_height'] = float(saved['antenna_height'])
         except Exception as e:
             logger.warning("Blad wczytywania config.json: %s", e)
     return cfg
@@ -70,6 +77,58 @@ def save_config(cfg):
             json.dump(cfg, f, indent=2, ensure_ascii=False)
     except Exception as e:
         logger.error("Blad zapisu config.json: %s", e)
+
+
+def get_cpu_temp():
+    """Odczytaj temperature CPU Raspberry Pi."""
+    try:
+        with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+            temp_mc = int(f.read().strip())
+        return round(temp_mc / 1000.0, 1)
+    except Exception:
+        pass
+    # Fallback: vcgencmd
+    try:
+        result = subprocess.run(['vcgencmd', 'measure_temp'], capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            # temp=42.8'C
+            s = result.stdout.strip()
+            return float(s.split('=')[1].replace("'C", ""))
+    except Exception:
+        pass
+    return None
+
+
+def estimate_accuracy(fix_quality, hdop, vdop, pdop):
+    """Oszacuj dokladnosc na podstawie jakosci fixu i DOP.
+
+    Bazowe sigma (1-sigma) dla poszczegolnych typow fixu:
+      RTK Fixed: 0.008 m (H), 0.015 m (V)
+      RTK Float: 0.20 m (H), 0.30 m (V)
+      DGPS:      0.50 m (H), 0.80 m (V)
+      GPS:       2.50 m (H), 4.00 m (V)
+
+    Dokladnosc = sigma_bazowe * DOP (HDOP dla poziomu, VDOP dla pionu).
+    Zwracamy 2-sigma (95% ufnosc).
+    """
+    base_h = {4: 0.008, 5: 0.20, 2: 0.50, 1: 2.50}
+    base_v = {4: 0.015, 5: 0.30, 2: 0.80, 1: 4.00}
+
+    fq = fix_quality or 0
+    if fq not in base_h:
+        return None, None
+
+    bh = base_h[fq]
+    bv = base_v[fq]
+
+    h_dop = hdop if hdop else (pdop if pdop else 1.0)
+    v_dop = vdop if vdop else (pdop if pdop else 1.5)
+
+    # 2-sigma (95%)
+    acc_h = round(bh * h_dop * 2, 3)
+    acc_v = round(bv * v_dop * 2, 3)
+
+    return acc_h, acc_v
 
 
 # --- Inicjalizacja ---
@@ -85,7 +144,7 @@ gps = GPSReader(
 
 ntrip = NTRIPClient(gps, config.get('ntrip', {}))
 
-surveyor = Surveyor(gps)
+surveyor = Surveyor(gps, base_dir=PROJECTS_DIR)
 
 # --- Stacje referencyjne ASG-EUPOS ---
 STATIONS = {
@@ -170,7 +229,7 @@ def index():
 
 @app.route('/api/status')
 def api_status():
-    """Prosty endpoint statusu (polling fallback)."""
+    """Glowny endpoint statusu (polling 1 Hz)."""
     gps_data = gps.get_data()
     ntrip_stats = ntrip.get_stats()
     fq = gps_data.get('fix_quality', 0)
@@ -178,6 +237,18 @@ def api_status():
         0: 'No Fix', 1: 'GPS Fix', 2: 'DGPS Fix',
         3: 'PPS Fix', 4: 'RTK Fixed', 5: 'RTK Float', 6: 'Estymacja',
     }
+
+    # Estymacja dokladnosci
+    acc_h, acc_v = estimate_accuracy(
+        fq,
+        gps_data.get('hdop'),
+        gps_data.get('vdop'),
+        gps_data.get('pdop')
+    )
+
+    # Temperatura CPU
+    cpu_temp = get_cpu_temp()
+
     return jsonify({
         'fix_quality': fq,
         'fix_label': fix_labels.get(fq, 'Typ %d' % fq),
@@ -203,12 +274,16 @@ def api_status():
         'ntrip_error': ntrip_stats.get('error'),
         'measurement': surveyor.get_measurement_status(),
         'stakeout': _get_stakeout_data(gps_data),
+        'accuracy_h': acc_h,
+        'accuracy_v': acc_v,
+        'cpu_temp': cpu_temp,
+        'antenna_height': config.get('antenna_height', 0.0),
     })
 
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
-    """Pobierz aktualna konfiguracje NTRIP."""
+    """Pobierz aktualna konfiguracje."""
     return jsonify({
         'ntrip': {
             'host': config['ntrip']['host'],
@@ -221,7 +296,30 @@ def get_config():
         },
         'gps_port': gps.port,
         'stations': STATIONS,
+        'antenna_height': config.get('antenna_height', 0.0),
     })
+
+
+@app.route('/api/antenna_height', methods=['POST'])
+def set_antenna_height():
+    """Ustaw wysokosc anteny nad punktem."""
+    data = request.get_json()
+    if data is None or 'height' not in data:
+        return jsonify({'status': 'error', 'message': 'Podaj wysokosc anteny'}), 400
+    try:
+        h = float(data['height'])
+        if h < 0 or h > 10:
+            return jsonify({'status': 'error', 'message': 'Wysokosc anteny 0-10 m'}), 400
+        config['antenna_height'] = round(h, 3)
+        save_config(config)
+        surveyor.antenna_height = config['antenna_height']
+        return jsonify({
+            'status': 'ok',
+            'antenna_height': config['antenna_height'],
+            'message': 'Wysokosc anteny: %.3f m' % config['antenna_height'],
+        })
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': 'Nieprawidlowa wartosc: %s' % e}), 400
 
 
 @app.route('/api/ntrip', methods=['POST'])
@@ -249,11 +347,9 @@ def update_ntrip():
 
     save_config(config)
 
-    # Stop poprzedniego polaczenia (raz, nie podwojnie)
     ntrip.stop()
 
     if nc['enabled']:
-        # Tylko aktualizuj config (nie wywoluj configure bo robi stop/start)
         ntrip.config.update(nc)
         ntrip.start()
 
@@ -367,6 +463,46 @@ def stakeout_stop():
     return jsonify({'status': 'ok'})
 
 
+# === Mapa / DXF ===
+
+@app.route('/api/map/data', methods=['GET'])
+def map_data():
+    """Dane do podgladu mapy: punkty projektu + lista DXF."""
+    points = surveyor.get_project_points()
+    dxf_files = surveyor.list_dxf_files()
+    return jsonify({
+        'points': points,
+        'dxf_files': dxf_files,
+        'project': surveyor.get_current_project(),
+    })
+
+
+@app.route('/api/map/dxf/<filename>', methods=['GET'])
+def map_dxf(filename):
+    """Zwroc sparsowane elementy DXF (linie, polyline) jako JSON."""
+    data = surveyor.load_dxf_file(filename)
+    return jsonify(data)
+
+
+@app.route('/api/project/upload_dxf', methods=['POST'])
+def upload_dxf():
+    """Wgraj plik DXF do biezacego projektu."""
+    if not surveyor._current_project:
+        return jsonify({'status': 'error', 'message': 'Najpierw otworz projekt'}), 400
+    if 'file' not in request.files:
+        return jsonify({'status': 'error', 'message': 'Brak pliku'}), 400
+    f = request.files['file']
+    if not f.filename.lower().endswith('.dxf'):
+        return jsonify({'status': 'error', 'message': 'Tylko pliki DXF'}), 400
+    try:
+        safe_name = os.path.basename(f.filename)
+        dest = os.path.join(surveyor._current_project['dir'], safe_name)
+        f.save(dest)
+        return jsonify({'status': 'ok', 'message': 'Plik %s wgrany' % safe_name})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 # === Main ===
 
 def main():
@@ -383,6 +519,9 @@ def main():
         print("       RPi 4B -> /dev/ttyS0 | RPi 5 -> /dev/ttyAMA0 | USB -> /dev/ttyUSB0")
         print("       Sprawdz: jumper B na module, UART wlaczony, serial-getty wylaczony")
 
+    # Ustaw wysokosc anteny w module pomiarowym
+    surveyor.antenna_height = config.get('antenna_height', 0.0)
+
     # NTRIP
     if config['ntrip'].get('enabled') and config['ntrip'].get('username'):
         ntrip.configure(config['ntrip'])
@@ -396,6 +535,14 @@ def main():
 
     # Surveyor
     print("  [OK] Pomiary: PL-2000/6 + %s" % surveyor.converter.height_method)
+    print("  [OK] Projekty: %s" % PROJECTS_DIR)
+    if config.get('antenna_height', 0) > 0:
+        print("  [OK] Wysokosc anteny: %.3f m" % config['antenna_height'])
+
+    # CPU temp
+    cpu_temp = get_cpu_temp()
+    if cpu_temp is not None:
+        print("  [OK] CPU: %.1f°C" % cpu_temp)
 
     # Wyswietl adresy
     local_ip = "???"

@@ -2,6 +2,10 @@
 surveyor.py - Modul pomiarowy RTK Monitor
 Zbiera probki RTK Fixed, usrednia, konwertuje na PL-2000/EVRF2007,
 zapisuje do CSV i raportu.
+
+Projekty przechowywane w ~/rtk_projekty (poza aplikacja).
+Obsluga wysokosci anteny nad punktem.
+Odczyt DXF do podgladu mapy.
 """
 
 import os
@@ -18,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class Measurement:
-    """Pojedynczy pomiar punktu (kolekcja probek)."""
+    """Pojedynszy pomiar punktu (kolekcja probek)."""
 
     def __init__(self, point_name, required_samples=10, min_fix_quality=4):
         self.point_name = point_name
@@ -68,12 +72,10 @@ class Measurement:
         lon = gps_data.get('longitude')
         alt = gps_data.get('altitude')
 
-        # Odrzuc probki bez RTK Fixed
         if fq < self.min_fix_quality:
             self.rejected += 1
             return False
 
-        # Odrzuc probki bez pozycji
         if lat is None or lon is None:
             self.rejected += 1
             return False
@@ -117,11 +119,9 @@ class Measurement:
         alts = [s['alt'] for s in self.samples if s['alt'] is not None]
         avg_alt = sum(alts) / len(alts) if alts else None
 
-        # Wysokosc elipsoidalna (prawdziwa, do konwersji EVRF2007)
         alts_ell = [s['alt_ell'] for s in self.samples if s.get('alt_ell') is not None]
         avg_alt_ell = sum(alts_ell) / len(alts_ell) if alts_ell else None
 
-        # Odchylenie standardowe
         if n > 1:
             std_lat = math.sqrt(sum((s['lat'] - avg_lat) ** 2 for s in self.samples) / (n - 1))
             std_lon = math.sqrt(sum((s['lon'] - avg_lon) ** 2 for s in self.samples) / (n - 1))
@@ -132,12 +132,9 @@ class Measurement:
         else:
             std_lat = std_lon = std_alt = 0.0
 
-        # Srednia std w metrach (przyblizone)
-        # 1 stopien lat ~ 111 km, 1 stopien lon ~ 111 km * cos(lat)
         std_lat_m = std_lat * 111000.0
         std_lon_m = std_lon * 111000.0 * math.cos(math.radians(avg_lat))
 
-        # Srednie DOP
         hdops = [s['hdop'] for s in self.samples if s['hdop'] is not None]
         pdops = [s['pdop'] for s in self.samples if s['pdop'] is not None]
 
@@ -167,15 +164,15 @@ class Surveyor:
 
     def __init__(self, gps_reader, base_dir=None):
         self.gps = gps_reader
-        self.base_dir = base_dir or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), 'projekty'
-        )
+        # Domyslnie ~/rtk_projekty (poza aplikacja, przetrwa reinstalacje)
+        self.base_dir = base_dir or os.path.expanduser('~/rtk_projekty')
         self.converter = CoordinateConverter()
         self._current_measurement = None
         self._current_project = None
         self._point_counter = 0
         self._lock = threading.Lock()
         self._collect_thread = None
+        self.antenna_height = 0.0  # wys. anteny nad punktem [m]
 
         os.makedirs(self.base_dir, exist_ok=True)
         logger.info("Surveyor: katalog projektow: %s", self.base_dir)
@@ -194,17 +191,16 @@ class Surveyor:
         csv_path = os.path.join(project_dir, "wspolrzedne.csv")
         report_path = os.path.join(project_dir, "raport.txt")
 
-        # Utworz CSV z naglowkiem jesli nie istnieje
         if not os.path.exists(csv_path):
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f, delimiter=';')
                 writer.writerow([
                     'ID', 'Nazwa',
                     'X_PL2000', 'Y_PL2000', 'H_EVRF2007',
-                    'Lat_WGS84', 'Lon_WGS84', 'H_elips'
+                    'Lat_WGS84', 'Lon_WGS84', 'H_elips',
+                    'Wys_anteny', 'Dokl_poziom', 'Dokl_pion'
                 ])
 
-        # Utworz raport z naglowkiem
         if not os.path.exists(report_path):
             with open(report_path, 'w', encoding='utf-8') as f:
                 f.write("=" * 70 + "\n")
@@ -213,6 +209,7 @@ class Surveyor:
                 f.write("  Utworzony: %s\n" % datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                 f.write("  Uklad poziomy: PL-2000 strefa 6 (EPSG:2177)\n")
                 f.write("  Uklad wysokosciowy: PL-EVRF2007-NH (%s)\n" % self.converter.height_method)
+                f.write("  Katalog: %s\n" % project_dir)
                 f.write("=" * 70 + "\n\n")
 
         self._current_project = {
@@ -272,11 +269,10 @@ class Surveyor:
             self._current_measurement = Measurement(
                 point_name=point_name.strip(),
                 required_samples=required_samples,
-                min_fix_quality=4,  # tylko RTK Fixed
+                min_fix_quality=4,
             )
             self._current_measurement.start()
 
-        # Uruchom watek zbierania probek
         self._collect_thread = threading.Thread(target=self._collect_loop, daemon=True)
         self._collect_thread.start()
 
@@ -328,7 +324,7 @@ class Surveyor:
                 self._finalize_measurement()
                 break
 
-            time.sleep(1)  # 1 probka na sekunde
+            time.sleep(1)
 
     def _finalize_measurement(self):
         """Oblicz wyniki, konwertuj, zapisz do pliku."""
@@ -344,9 +340,13 @@ class Surveyor:
             return
 
         # Konwersja PL-2000 + EVRF2007
-        # Uzyj prawdziwej wysokosci elipsoidalnej (MSL + geo_sep) do konwersji
         h_for_conv = avg.get('alt_ellipsoidal') or avg['alt']
         conv = self.converter.convert_point(avg['lat'], avg['lon'], h_for_conv)
+
+        # Odejmij wysokosc anteny od wysokosci normalnej
+        h_normal = conv['h_normal']
+        if h_normal is not None and self.antenna_height > 0:
+            h_normal = h_normal - self.antenna_height
 
         self._point_counter += 1
         point_id = self._point_counter
@@ -356,7 +356,7 @@ class Surveyor:
             'point_name': m.point_name,
             'x_pl2000': conv['x_pl2000'],
             'y_pl2000': conv['y_pl2000'],
-            'h_normal': conv['h_normal'],
+            'h_normal': h_normal,
             'lat_wgs84': avg['lat'],
             'lon_wgs84': avg['lon'],
             'h_ellipsoidal': h_for_conv,
@@ -368,18 +368,16 @@ class Surveyor:
             'avg_pdop': avg['avg_pdop'],
             'duration_s': avg['duration_s'],
             'height_method': conv['height_method'],
+            'antenna_height': self.antenna_height,
         }
 
-        # Zapisz do CSV
         self._save_to_csv(result)
-
-        # Zapisz do raportu
         self._save_to_report(result, avg)
 
-        logger.info("Pomiar zapisany: #%d '%s' X=%.3f Y=%.3f H=%.3f",
+        logger.info("Pomiar zapisany: #%d '%s' X=%.3f Y=%.3f H=%.3f (ant=%.3f)",
                      point_id, m.point_name,
                      conv['x_pl2000'] or 0, conv['y_pl2000'] or 0,
-                     conv['h_normal'] or 0)
+                     h_normal or 0, self.antenna_height)
 
     def _save_to_csv(self, result):
         """Dopisz punkt do pliku CSV."""
@@ -394,10 +392,13 @@ class Surveyor:
                     result['point_name'],
                     "%.3f" % result['x_pl2000'] if result['x_pl2000'] else '',
                     "%.3f" % result['y_pl2000'] if result['y_pl2000'] else '',
-                    "%.3f" % result['h_normal'] if result['h_normal'] else '',
+                    "%.3f" % result['h_normal'] if result['h_normal'] is not None else '',
                     "%.8f" % result['lat_wgs84'] if result['lat_wgs84'] else '',
                     "%.8f" % result['lon_wgs84'] if result['lon_wgs84'] else '',
                     "%.3f" % result['h_ellipsoidal'] if result['h_ellipsoidal'] else '',
+                    "%.3f" % result['antenna_height'],
+                    "%.4f" % result['std_horizontal_m'] if result['std_horizontal_m'] else '',
+                    "%.4f" % result['std_alt'] if result['std_alt'] is not None else '',
                 ])
             logger.info("CSV: punkt #%d zapisany do %s", result['point_id'], csv_path)
         except Exception as e:
@@ -417,6 +418,8 @@ class Surveyor:
                 f.write("  Czas trwania:  %.1f s\n" % (avg['duration_s'] or 0))
                 f.write("  Probki:        %d uzytych / %d odrzuconych\n" % (
                     result['samples'], result['rejected']))
+                if result['antenna_height'] > 0:
+                    f.write("  Wys. anteny:   %.3f m\n" % result['antenna_height'])
                 f.write("\n")
                 f.write("  --- Wspolrzedne PL-2000/6 ---\n")
                 if result['x_pl2000']:
@@ -429,6 +432,8 @@ class Surveyor:
                 if result['h_normal'] is not None:
                     f.write("  H normalna:    %.3f m (EVRF2007-NH, metoda: %s)\n" % (
                         result['h_normal'], result['height_method']))
+                    if result['antenna_height'] > 0:
+                        f.write("  (po odjęciu wys. anteny %.3f m)\n" % result['antenna_height'])
                 f.write("  h elipsoid.:   %.3f m (WGS84)\n" % (result['h_ellipsoidal'] or 0))
                 f.write("\n")
                 f.write("  --- WGS84 ---\n")
@@ -445,7 +450,7 @@ class Surveyor:
         except Exception as e:
             logger.error("Blad zapisu raportu: %s", e)
 
-    # === Pomocnicze ===
+    # === Pomierzone punkty ===
 
     def get_project_points(self):
         """Zwroc liste pomierzonych punktow z biezacego projektu."""
@@ -465,7 +470,7 @@ class Surveyor:
                     if len(row) < 5:
                         continue
                     try:
-                        points.append({
+                        pt = {
                             'id': row[0],
                             'name': row[1],
                             'x': float(row[2]) if row[2] else None,
@@ -474,7 +479,15 @@ class Surveyor:
                             'lat': float(row[5]) if len(row) > 5 and row[5] else None,
                             'lon': float(row[6]) if len(row) > 6 and row[6] else None,
                             'h_elips': float(row[7]) if len(row) > 7 and row[7] else None,
-                        })
+                        }
+                        # Nowe pola (kompatybilnosc wsteczna)
+                        if len(row) > 8 and row[8]:
+                            pt['antenna_h'] = float(row[8])
+                        if len(row) > 9 and row[9]:
+                            pt['acc_h'] = float(row[9])
+                        if len(row) > 10 and row[10]:
+                            pt['acc_v'] = float(row[10])
+                        points.append(pt)
                     except (ValueError, IndexError):
                         continue
         except Exception as e:
@@ -537,27 +550,24 @@ class Surveyor:
         return points
 
     def compute_stakeout(self, target_x, target_y, target_h, gps_data):
-        """Oblicz roznice do punktu docelowego.
-        target_x, target_y: PL-2000 (X=northing, Y=easting)
-        target_h: H normalna EVRF2007
-        Zwraca dict z dN, dE, dH, dist2d, dist3d.
-        """
+        """Oblicz roznice do punktu docelowego."""
         lat = gps_data.get('latitude')
         lon = gps_data.get('longitude')
         if lat is None or lon is None:
             return None
 
-        # Konwertuj aktualna pozycje GPS na PL-2000
         cur_x, cur_y = self.converter.wgs84_to_pl2000(lat, lon)
         if cur_x is None or cur_y is None:
             return None
 
-        # Aktualna wysokosc normalna
         h_ell = gps_data.get('altitude_ellipsoidal') or gps_data.get('altitude')
         cur_h = self.converter.ellipsoidal_to_normal(lat, lon, h_ell) if h_ell else None
+        # Odejmij wysokosc anteny od aktualnej H
+        if cur_h is not None and self.antenna_height > 0:
+            cur_h = cur_h - self.antenna_height
 
-        dN = target_x - cur_x  # + = idz na polnoc
-        dE = target_y - cur_y  # + = idz na wschod
+        dN = target_x - cur_x
+        dE = target_y - cur_y
         dist2d = math.sqrt(dN * dN + dE * dE)
 
         result = {
@@ -572,11 +582,188 @@ class Surveyor:
         }
 
         if target_h is not None and cur_h is not None:
-            dH = target_h - cur_h  # + = idz do gory
+            dH = target_h - cur_h
             result['dH'] = round(dH, 3)
             result['dist3d'] = round(math.sqrt(dN * dN + dE * dE + dH * dH), 3)
 
         return result
+
+    # === DXF ===
+
+    def list_dxf_files(self):
+        """Lista plikow DXF w biezacym projekcie."""
+        if not self._current_project:
+            return []
+        project_dir = self._current_project['dir']
+        files = []
+        try:
+            for f in sorted(os.listdir(project_dir)):
+                if f.lower().endswith('.dxf'):
+                    files.append(f)
+        except Exception:
+            pass
+        return files
+
+    def load_dxf_file(self, filename):
+        """Parsuj plik DXF i zwroc elementy geometryczne (linie, polyline).
+        Prosty parser ASCII DXF bez zewnetrznych zaleznosci.
+        """
+        if not self._current_project:
+            return {'error': 'Brak projektu', 'entities': []}
+        safe = os.path.basename(filename)
+        fpath = os.path.join(self._current_project['dir'], safe)
+        if not os.path.exists(fpath):
+            return {'error': 'Plik nie istnieje', 'entities': []}
+
+        entities = []
+        try:
+            entities = self._parse_dxf(fpath)
+        except Exception as e:
+            logger.error("Blad parsowania DXF %s: %s", safe, e)
+            return {'error': str(e), 'entities': []}
+
+        return {'filename': safe, 'entities': entities, 'count': len(entities)}
+
+    def _parse_dxf(self, filepath):
+        """Prosty parser ASCII DXF - wyciaga LINE, LWPOLYLINE, POLYLINE, POINT, CIRCLE, ARC."""
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+
+        # Parsuj grupy kodo-wartosc
+        groups = []
+        i = 0
+        while i < len(lines) - 1:
+            try:
+                code = int(lines[i].strip())
+                value = lines[i + 1].strip()
+                groups.append((code, value))
+            except (ValueError, IndexError):
+                pass
+            i += 2
+
+        entities = []
+        in_entities = False
+        idx = 0
+
+        while idx < len(groups):
+            code, value = groups[idx]
+
+            # Szukaj sekcji ENTITIES
+            if code == 2 and value == 'ENTITIES':
+                in_entities = True
+                idx += 1
+                continue
+            if code == 0 and value == 'ENDSEC':
+                in_entities = False
+                idx += 1
+                continue
+
+            if not in_entities:
+                idx += 1
+                continue
+
+            # Entity start
+            if code == 0:
+                etype = value
+                idx += 1
+                edata = {}
+                layer = '0'
+
+                # Zbierz atrybuty entity az do nastepnego code 0
+                while idx < len(groups) and groups[idx][0] != 0:
+                    c, v = groups[idx]
+                    if c == 8:
+                        layer = v
+                    edata.setdefault(c, []).append(v)
+                    idx += 1
+
+                if etype == 'LINE':
+                    try:
+                        e = {
+                            'type': 'line',
+                            'layer': layer,
+                            'x1': float(edata.get(10, ['0'])[0]),
+                            'y1': float(edata.get(20, ['0'])[0]),
+                            'x2': float(edata.get(11, ['0'])[0]),
+                            'y2': float(edata.get(21, ['0'])[0]),
+                        }
+                        entities.append(e)
+                    except (ValueError, IndexError):
+                        pass
+
+                elif etype == 'LWPOLYLINE':
+                    try:
+                        xs = [float(v) for v in edata.get(10, [])]
+                        ys = [float(v) for v in edata.get(20, [])]
+                        closed = int(edata.get(70, ['0'])[0]) & 1
+                        if xs and ys and len(xs) == len(ys):
+                            pts = list(zip(xs, ys))
+                            entities.append({
+                                'type': 'polyline',
+                                'layer': layer,
+                                'points': pts,
+                                'closed': bool(closed),
+                            })
+                    except (ValueError, IndexError):
+                        pass
+
+                elif etype == 'POINT':
+                    try:
+                        entities.append({
+                            'type': 'point',
+                            'layer': layer,
+                            'x': float(edata.get(10, ['0'])[0]),
+                            'y': float(edata.get(20, ['0'])[0]),
+                        })
+                    except (ValueError, IndexError):
+                        pass
+
+                elif etype == 'CIRCLE':
+                    try:
+                        entities.append({
+                            'type': 'circle',
+                            'layer': layer,
+                            'cx': float(edata.get(10, ['0'])[0]),
+                            'cy': float(edata.get(20, ['0'])[0]),
+                            'r': float(edata.get(40, ['0'])[0]),
+                        })
+                    except (ValueError, IndexError):
+                        pass
+
+                elif etype == 'ARC':
+                    try:
+                        entities.append({
+                            'type': 'arc',
+                            'layer': layer,
+                            'cx': float(edata.get(10, ['0'])[0]),
+                            'cy': float(edata.get(20, ['0'])[0]),
+                            'r': float(edata.get(40, ['0'])[0]),
+                            'start_angle': float(edata.get(50, ['0'])[0]),
+                            'end_angle': float(edata.get(51, ['360'])[0]),
+                        })
+                    except (ValueError, IndexError):
+                        pass
+
+                elif etype == 'TEXT' or etype == 'MTEXT':
+                    try:
+                        text_val = edata.get(1, [''])[0]
+                        if text_val:
+                            entities.append({
+                                'type': 'text',
+                                'layer': layer,
+                                'x': float(edata.get(10, ['0'])[0]),
+                                'y': float(edata.get(20, ['0'])[0]),
+                                'text': text_val,
+                                'height': float(edata.get(40, ['1'])[0]),
+                            })
+                    except (ValueError, IndexError):
+                        pass
+            else:
+                idx += 1
+
+        return entities
+
+    # === Pomocnicze ===
 
     def _count_existing_points(self, csv_path):
         """Policz istniejace punkty w CSV."""
@@ -584,7 +771,7 @@ class Surveyor:
             return 0
         try:
             with open(csv_path, 'r', encoding='utf-8') as f:
-                return max(0, sum(1 for _ in f) - 1)  # minus naglowek
+                return max(0, sum(1 for _ in f) - 1)
         except Exception:
             return 0
 

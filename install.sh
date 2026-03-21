@@ -7,14 +7,14 @@ echo "========================================"
 echo
 
 # Aktualizacja
-echo "[1/5] Aktualizacja pakietow..."
+echo "[1/6] Aktualizacja pakietow..."
 sudo apt-get update -q
 
-echo "[2/5] Instalacja zaleznosci..."
+echo "[2/6] Instalacja zaleznosci..."
 sudo apt-get install -y python3 python3-pip python3-venv libproj-dev proj-data proj-bin
 
 # UART
-echo "[3/5] Konfiguracja UART..."
+echo "[3/6] Konfiguracja UART..."
 NEEDS_REBOOT=0
 
 CONFIG_FILE=""
@@ -65,8 +65,14 @@ fi
 # Grupa dialout
 sudo usermod -a -G dialout "$USER" 2>/dev/null || true
 
+# Katalog projektow (poza aplikacja - przetrwa reinstalacje)
+echo "[4/6] Katalog projektow..."
+PROJECTS_DIR="$HOME/rtk_projekty"
+mkdir -p "$PROJECTS_DIR"
+echo "  Projekty: $PROJECTS_DIR"
+
 # Python venv
-echo "[4/5] Srodowisko Python..."
+echo "[5/6] Srodowisko Python..."
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 python3 -m venv venv
@@ -74,16 +80,14 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Opcjonalnie: pelna siatka geoidy dla dokladnych wysokosci
+# Siatka geoidy
 echo
 echo "  [INFO] Instaluje siatke geoidy PL-EVRF2007-NH..."
 PROJ_DIR=$(python3 -c "import pyproj; print(pyproj.datadir.get_data_dir())" 2>/dev/null)
 if [ -n "$PROJ_DIR" ]; then
-    # Napraw proj.db version mismatch
     if [ -f /usr/share/proj/proj.db ]; then
         cp /usr/share/proj/proj.db "$PROJ_DIR/proj.db" 2>/dev/null || true
     fi
-    # Pobierz polska siatke geoidy
     projsync --target-dir "$PROJ_DIR" --file pl_gugik_geoid2021-PL-EVRF2007-NH.tif 2>/dev/null && \
         echo "  [OK] Siatka geoidy zainstalowana" || \
         echo "  [!!] Nie udalo sie pobrac siatki (dziala bez niej z przyblizeniem)"
@@ -92,12 +96,15 @@ else
 fi
 
 echo
-echo "[5/5] Gotowe!"
+echo "[6/6] Gotowe!"
 echo
 echo "  Uruchomienie:"
 echo "    cd $SCRIPT_DIR"
 echo "    source venv/bin/activate"
 echo "    python3 app.py"
+echo
+echo "  Projekty zapisywane w: $PROJECTS_DIR"
+echo "  (przetrwaja reinstalacje aplikacji)"
 echo
 
 if [ "$NEEDS_REBOOT" -eq 1 ]; then

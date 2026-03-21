@@ -625,11 +625,15 @@ class Surveyor:
         return {'filename': safe, 'entities': entities, 'count': len(entities)}
 
     def _parse_dxf(self, filepath):
-        """Prosty parser ASCII DXF - wyciaga LINE, LWPOLYLINE, POLYLINE, POINT, CIRCLE, ARC."""
+        """Parser ASCII DXF - obsluguje formaty R12 (AC1009) i nowsze.
+
+        R12 uzywa POLYLINE + VERTEX + SEQEND (oddzielne encje code-0).
+        Nowsze formaty uzywaja LWPOLYLINE (wspolrzedne wewnatrz jednej encji).
+        """
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
 
-        # Parsuj grupy kodo-wartosc
+        # Parsuj grupy kod-wartosc
         groups = []
         i = 0
         while i < len(lines) - 1:
@@ -645,6 +649,12 @@ class Surveyor:
         in_entities = False
         idx = 0
 
+        # Stan dla POLYLINE R12 (POLYLINE -> VERTEX* -> SEQEND)
+        in_polyline = False
+        poly_layer = '0'
+        poly_closed = False
+        poly_vertices = []
+
         while idx < len(groups):
             code, value = groups[idx]
 
@@ -654,22 +664,97 @@ class Surveyor:
                 idx += 1
                 continue
             if code == 0 and value == 'ENDSEC':
+                # Zamknij otwarta polyline
+                if in_polyline and poly_vertices:
+                    entities.append({
+                        'type': 'polyline',
+                        'layer': poly_layer,
+                        'points': list(poly_vertices),
+                        'closed': poly_closed,
+                    })
+                    in_polyline = False
                 in_entities = False
                 idx += 1
                 continue
+            if code == 0 and value == 'EOF':
+                if in_polyline and poly_vertices:
+                    entities.append({
+                        'type': 'polyline',
+                        'layer': poly_layer,
+                        'points': list(poly_vertices),
+                        'closed': poly_closed,
+                    })
+                break
 
             if not in_entities:
                 idx += 1
                 continue
 
-            # Entity start
+            # === Entity start (code 0) ===
             if code == 0:
                 etype = value
                 idx += 1
+
+                # --- SEQEND: koniec POLYLINE R12 ---
+                if etype == 'SEQEND':
+                    if in_polyline and poly_vertices:
+                        entities.append({
+                            'type': 'polyline',
+                            'layer': poly_layer,
+                            'points': list(poly_vertices),
+                            'closed': poly_closed,
+                        })
+                    in_polyline = False
+                    poly_vertices = []
+                    # Pomin atrybuty SEQEND
+                    while idx < len(groups) and groups[idx][0] != 0:
+                        idx += 1
+                    continue
+
+                # --- VERTEX: wierzcholek POLYLINE R12 ---
+                if etype == 'VERTEX':
+                    vx = None
+                    vy = None
+                    while idx < len(groups) and groups[idx][0] != 0:
+                        c, v = groups[idx]
+                        if c == 10:
+                            try: vx = float(v)
+                            except ValueError: pass
+                        elif c == 20:
+                            try: vy = float(v)
+                            except ValueError: pass
+                        idx += 1
+                    if in_polyline and vx is not None and vy is not None:
+                        poly_vertices.append((vx, vy))
+                    continue
+
+                # --- POLYLINE R12: poczatek sekwencji ---
+                if etype == 'POLYLINE':
+                    # Zamknij poprzednia jesli otwarta
+                    if in_polyline and poly_vertices:
+                        entities.append({
+                            'type': 'polyline',
+                            'layer': poly_layer,
+                            'points': list(poly_vertices),
+                            'closed': poly_closed,
+                        })
+                    in_polyline = True
+                    poly_layer = '0'
+                    poly_closed = False
+                    poly_vertices = []
+                    while idx < len(groups) and groups[idx][0] != 0:
+                        c, v = groups[idx]
+                        if c == 8:
+                            poly_layer = v
+                        elif c == 70:
+                            try: poly_closed = bool(int(v) & 1)
+                            except ValueError: pass
+                        idx += 1
+                    continue
+
+                # --- Standardowe encje (nie w trakcie POLYLINE R12) ---
                 edata = {}
                 layer = '0'
-
-                # Zbierz atrybuty entity az do nastepnego code 0
                 while idx < len(groups) and groups[idx][0] != 0:
                     c, v = groups[idx]
                     if c == 8:
@@ -679,15 +764,14 @@ class Surveyor:
 
                 if etype == 'LINE':
                     try:
-                        e = {
+                        entities.append({
                             'type': 'line',
                             'layer': layer,
                             'x1': float(edata.get(10, ['0'])[0]),
                             'y1': float(edata.get(20, ['0'])[0]),
                             'x2': float(edata.get(11, ['0'])[0]),
                             'y2': float(edata.get(21, ['0'])[0]),
-                        }
-                        entities.append(e)
+                        })
                     except (ValueError, IndexError):
                         pass
 
@@ -697,11 +781,10 @@ class Surveyor:
                         ys = [float(v) for v in edata.get(20, [])]
                         closed = int(edata.get(70, ['0'])[0]) & 1
                         if xs and ys and len(xs) == len(ys):
-                            pts = list(zip(xs, ys))
                             entities.append({
                                 'type': 'polyline',
                                 'layer': layer,
-                                'points': pts,
+                                'points': list(zip(xs, ys)),
                                 'closed': bool(closed),
                             })
                     except (ValueError, IndexError):
@@ -744,7 +827,7 @@ class Surveyor:
                     except (ValueError, IndexError):
                         pass
 
-                elif etype == 'TEXT' or etype == 'MTEXT':
+                elif etype in ('TEXT', 'MTEXT'):
                     try:
                         text_val = edata.get(1, [''])[0]
                         if text_val:

@@ -236,6 +236,9 @@
 
         // Wytyczanie
         if (d.stakeout) updateStakeout(d.stakeout);
+
+        // Mapa - aktualizuj pozycje GPS i cel wytyczania
+        updateMapFromStatus(d);
     }
 
     function accColor(val) {
@@ -799,6 +802,9 @@
 
     // ===================================================================
     //  MAPA - Canvas z DXF overlay, pan/zoom, dotyk Android Chrome
+    //  Rozowy punkt = aktualna pozycja GPS
+    //  Ciemnoniebieski = punkty projektu
+    //  Jasnoniebieski = cel wytyczania
     // ===================================================================
 
     var mapOpen = false;
@@ -806,14 +812,20 @@
     var mapCtx = null;
     var mapPoints = [];
     var mapDxfEntities = [];
-    var mapDxfLayers = {};  // layer -> bool (visible)
+    var mapDxfLayers = {};
     var mapCurrentDxf = "";
+
+    // Aktualne dane z pollingu - pozycja GPS w PL-2000
+    var mapCurrentPos = { x: null, y: null };  // x=northing, y=easting
+    // Cel wytyczania
+    var mapStakeoutTarget = { active: false, x: null, y: null, name: null };
 
     // View transform
     var mapView = {
-        cx: 0, cy: 0,  // srodek widoku w ukladzie PL-2000
+        cx: 0, cy: 0,  // srodek widoku (easting, northing)
         scale: 1,       // pikseli na metr
-        w: 580, h: 400
+        w: 580, h: 400,
+        initialized: false
     };
 
     // Touch / mouse state
@@ -865,13 +877,31 @@
             });
         }
 
-        // Fit button
+        // Fit all button
         var fitBtn = document.getElementById("btn-map-fit");
         if (fitBtn) {
             fitBtn.addEventListener("click", function(e) {
                 e.preventDefault();
-                fitMapView();
+                fitMapView(false);
                 drawMap();
+            });
+        }
+
+        // Go to GPS position
+        var gpsBtn = document.getElementById("btn-map-goto-gps");
+        if (gpsBtn) {
+            gpsBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                gotoGpsPosition();
+            });
+        }
+
+        // Fit work view (GPS + stakeout target)
+        var workBtn = document.getElementById("btn-map-fit-work");
+        if (workBtn) {
+            workBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                fitWorkView();
             });
         }
 
@@ -886,7 +916,6 @@
         mapCanvas = document.getElementById("map-canvas");
         if (!mapCanvas) return;
 
-        // Dopasuj canvas do kontenera
         var parent = mapCanvas.parentElement;
         var w = parent.clientWidth - 4;
         if (w < 200) w = 200;
@@ -897,12 +926,12 @@
 
         mapCtx = mapCanvas.getContext("2d");
 
-        // === Touch events (Android Chrome) ===
+        // Touch events (Android Chrome)
         mapCanvas.addEventListener("touchstart", onMapTouchStart, { passive: false });
         mapCanvas.addEventListener("touchmove", onMapTouchMove, { passive: false });
         mapCanvas.addEventListener("touchend", onMapTouchEnd, { passive: false });
 
-        // === Mouse events (desktop) ===
+        // Mouse events (desktop)
         mapCanvas.addEventListener("mousedown", onMapMouseDown);
         mapCanvas.addEventListener("mousemove", onMapMouseMove);
         mapCanvas.addEventListener("mouseup", onMapMouseUp);
@@ -911,7 +940,6 @@
     }
 
     // --- Touch handlers ---
-
     function onMapTouchStart(e) {
         e.preventDefault();
         if (e.touches.length === 1) {
@@ -937,7 +965,6 @@
             var t = e.touches[0];
             var dx = t.clientX - mapDrag.startX;
             var dy = t.clientY - mapDrag.startY;
-            // Na mapie: Y rosnie w gore (PL-2000 X=northing), ekran Y rosnie w dol
             mapView.cx = mapDrag.startCx - dx / mapView.scale;
             mapView.cy = mapDrag.startCy + dy / mapView.scale;
             drawMap();
@@ -945,8 +972,7 @@
             var dx2 = e.touches[0].clientX - e.touches[1].clientX;
             var dy2 = e.touches[0].clientY - e.touches[1].clientY;
             var dist = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-            var ratio = dist / mapPinch.startDist;
-            mapView.scale = Math.max(0.001, Math.min(1000, mapPinch.startScale * ratio));
+            mapView.scale = Math.max(0.001, Math.min(1000, mapPinch.startScale * (dist / mapPinch.startDist)));
             drawMap();
         }
     }
@@ -957,7 +983,6 @@
     }
 
     // --- Mouse handlers ---
-
     function onMapMouseDown(e) {
         mapDrag.active = true;
         mapDrag.startX = e.clientX;
@@ -967,11 +992,7 @@
     }
 
     function onMapMouseMove(e) {
-        if (!mapDrag.active) {
-            // Pokaz wspolrzedne pod kursorem
-            showMapCoords(e);
-            return;
-        }
+        if (!mapDrag.active) { showMapCoords(e); return; }
         var dx = e.clientX - mapDrag.startX;
         var dy = e.clientY - mapDrag.startY;
         mapView.cx = mapDrag.startCx - dx / mapView.scale;
@@ -979,9 +1000,7 @@
         drawMap();
     }
 
-    function onMapMouseUp() {
-        mapDrag.active = false;
-    }
+    function onMapMouseUp() { mapDrag.active = false; }
 
     function onMapWheel(e) {
         e.preventDefault();
@@ -994,22 +1013,105 @@
         var rect = mapCanvas.getBoundingClientRect();
         var px = e.clientX - rect.left;
         var py = e.clientY - rect.top;
-        // Konwertuj piksel -> PL-2000 (Y=easting na osi X ekranu, X=northing na osi Y ekranu odwroconej)
         var worldY = mapView.cx + (px - mapView.w / 2) / mapView.scale;
         var worldX = mapView.cy + (mapView.h / 2 - py) / mapView.scale;
         var el = document.getElementById("map-coords");
         if (el) el.textContent = "X:" + worldX.toFixed(1) + " Y:" + worldY.toFixed(1);
     }
 
-    // --- Data loading ---
+    // --- Map: update from polling ---
+    function updateMapFromStatus(d) {
+        if (!mapOpen) return;
 
+        // Aktualna pozycja GPS w PL-2000
+        var changed = false;
+        if (d.cur_x_pl != null && d.cur_y_pl != null) {
+            mapCurrentPos.x = d.cur_x_pl;
+            mapCurrentPos.y = d.cur_y_pl;
+            changed = true;
+        }
+
+        // Cel wytyczania
+        if (d.stakeout && d.stakeout.active) {
+            mapStakeoutTarget.active = true;
+            mapStakeoutTarget.x = d.stakeout.target_x;
+            mapStakeoutTarget.y = d.stakeout.target_y;
+            mapStakeoutTarget.name = d.stakeout.name;
+            changed = true;
+        } else {
+            if (mapStakeoutTarget.active) changed = true;
+            mapStakeoutTarget.active = false;
+        }
+
+        // Auto-centruj na GPS przy pierwszym uzyciu jesli brak punktow
+        if (changed && !mapView.initialized && mapCurrentPos.x != null && mapPoints.length === 0 && mapDxfEntities.length === 0) {
+            mapView.cx = mapCurrentPos.y;
+            mapView.cy = mapCurrentPos.x;
+            mapView.scale = 2.0;
+            mapView.initialized = true;
+        }
+
+        if (changed) drawMap();
+    }
+
+    // --- Goto GPS position ---
+    function gotoGpsPosition() {
+        if (mapCurrentPos.x == null || mapCurrentPos.y == null) {
+            return;
+        }
+        mapView.cx = mapCurrentPos.y;  // easting -> horiz
+        mapView.cy = mapCurrentPos.x;  // northing -> vert
+        if (mapView.scale < 0.5) mapView.scale = 2.0;
+        drawMap();
+    }
+
+    // --- Fit work view: GPS + stakeout target ---
+    function fitWorkView() {
+        var xs = [], ys = [];
+
+        if (mapCurrentPos.x != null && mapCurrentPos.y != null) {
+            xs.push(mapCurrentPos.y);
+            ys.push(mapCurrentPos.x);
+        }
+
+        if (mapStakeoutTarget.active && mapStakeoutTarget.x != null && mapStakeoutTarget.y != null) {
+            xs.push(mapStakeoutTarget.y);
+            ys.push(mapStakeoutTarget.x);
+        }
+
+        if (xs.length === 0) {
+            gotoGpsPosition();
+            return;
+        }
+
+        if (xs.length === 1) {
+            mapView.cx = xs[0];
+            mapView.cy = ys[0];
+            if (mapView.scale < 0.5) mapView.scale = 2.0;
+        } else {
+            var minX = Math.min.apply(null, xs);
+            var maxX = Math.max.apply(null, xs);
+            var minY = Math.min.apply(null, ys);
+            var maxY = Math.max.apply(null, ys);
+            var rangeX = (maxX - minX) || 20;
+            var rangeY = (maxY - minY) || 20;
+            rangeX *= 1.4;
+            rangeY *= 1.4;
+            mapView.cx = (minX + maxX) / 2;
+            mapView.cy = (minY + maxY) / 2;
+            mapView.scale = Math.min(mapView.w / rangeX, mapView.h / rangeY);
+        }
+
+        drawMap();
+    }
+
+    // --- Data loading ---
     function loadMapData() {
         fetch("/api/map/data")
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 mapPoints = data.points || [];
 
-                // Aktualizuj select DXF
                 var sel = document.getElementById("map-dxf-select");
                 if (sel) {
                     var prev = sel.value;
@@ -1025,9 +1127,9 @@
                     if (prev) sel.value = prev;
                 }
 
-                // Dopasuj widok jesli pierwszy raz
-                if (mapView.scale === 1 && mapPoints.length > 0) {
-                    fitMapView();
+                if (!mapView.initialized && mapPoints.length > 0) {
+                    fitMapView(false);
+                    mapView.initialized = true;
                 }
 
                 drawMap();
@@ -1040,14 +1142,14 @@
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 mapDxfEntities = data.entities || [];
-                // Zbierz warstwy
                 mapDxfLayers = {};
                 for (var i = 0; i < mapDxfEntities.length; i++) {
                     var layer = mapDxfEntities[i].layer || "0";
                     if (!(layer in mapDxfLayers)) mapDxfLayers[layer] = true;
                 }
-                if (mapPoints.length === 0 && mapDxfEntities.length > 0) {
-                    fitMapView();
+                if (!mapView.initialized && mapDxfEntities.length > 0) {
+                    fitMapView(false);
+                    mapView.initialized = true;
                 }
                 drawMap();
             })
@@ -1060,47 +1162,43 @@
         fetch("/api/project/upload_dxf", { method: "POST", body: fd })
             .then(function(r) { return r.json(); })
             .then(function(res) {
-                if (res.status === "ok") {
-                    loadMapData();
-                } else {
-                    alert(res.message || "Blad wgrywania DXF");
-                }
+                if (res.status === "ok") loadMapData();
+                else alert(res.message || "Blad wgrywania DXF");
             })
             .catch(function() { alert("Blad komunikacji"); });
     }
 
     // --- View fitting ---
-
-    function fitMapView() {
+    function fitMapView(includeGps) {
         var xs = [], ys = [];
 
-        // Punkty projektu (Y=easting -> os X ekranu, X=northing -> os Y ekranu)
         for (var i = 0; i < mapPoints.length; i++) {
             var p = mapPoints[i];
             if (p.y != null && p.x != null) {
-                xs.push(p.y);  // easting -> horizontal
-                ys.push(p.x);  // northing -> vertical
+                xs.push(p.y);
+                ys.push(p.x);
             }
         }
 
-        // DXF entities
         for (var j = 0; j < mapDxfEntities.length; j++) {
             var e = mapDxfEntities[j];
             if (e.type === 'line') {
-                xs.push(e.y1, e.y2);
-                ys.push(e.x1, e.x2);
+                xs.push(e.y1, e.y2); ys.push(e.x1, e.x2);
             } else if (e.type === 'polyline' && e.points) {
                 for (var k = 0; k < e.points.length; k++) {
-                    xs.push(e.points[k][1]);
-                    ys.push(e.points[k][0]);
+                    xs.push(e.points[k][1]); ys.push(e.points[k][0]);
                 }
             } else if (e.type === 'point' || e.type === 'text') {
-                xs.push(e.y);
-                ys.push(e.x);
+                xs.push(e.y); ys.push(e.x);
             } else if (e.type === 'circle' || e.type === 'arc') {
-                xs.push(e.cy - e.r, e.cy + e.r);
-                ys.push(e.cx - e.r, e.cx + e.r);
+                xs.push(e.cy - e.r, e.cy + e.r); ys.push(e.cx - e.r, e.cx + e.r);
             }
+        }
+
+        // Uwzglednij GPS jesli wlaczone
+        if (includeGps !== false && mapCurrentPos.x != null) {
+            xs.push(mapCurrentPos.y);
+            ys.push(mapCurrentPos.x);
         }
 
         if (xs.length === 0) return;
@@ -1110,13 +1208,10 @@
         var minY = Math.min.apply(null, ys);
         var maxY = Math.max.apply(null, ys);
 
-        var rangeX = maxX - minX || 10;
-        var rangeY = maxY - minY || 10;
-
-        // Dodaj margines 10%
-        var margin = 0.1;
-        rangeX *= (1 + margin * 2);
-        rangeY *= (1 + margin * 2);
+        var rangeX = (maxX - minX) || 10;
+        var rangeY = (maxY - minY) || 10;
+        rangeX *= 1.2;
+        rangeY *= 1.2;
 
         mapView.cx = (minX + maxX) / 2;
         mapView.cy = (minY + maxY) / 2;
@@ -1124,56 +1219,52 @@
     }
 
     // --- Drawing ---
-
     function drawMap() {
         if (!mapCtx || !mapCanvas) return;
         var ctx = mapCtx;
         var w = mapView.w;
         var h = mapView.h;
 
-        // Czyszczenie
         ctx.fillStyle = "#0a1520";
         ctx.fillRect(0, 0, w, h);
 
-        // Grid
         drawMapGrid(ctx, w, h);
 
-        // DXF
-        if (mapDxfEntities.length > 0) {
-            drawDxfEntities(ctx, w, h);
-        }
+        if (mapDxfEntities.length > 0) drawDxfEntities(ctx, w, h);
 
-        // Punkty projektu
+        // Punkty projektu (ciemnoniebieski)
         var showPts = document.getElementById("map-show-points");
         if (showPts && showPts.checked && mapPoints.length > 0) {
             drawMapPoints(ctx, w, h);
         }
 
-        // Skala
+        // Cel wytyczania (jasnoniebieski)
+        if (mapStakeoutTarget.active && mapStakeoutTarget.x != null) {
+            drawStakeoutMarker(ctx, w, h);
+        }
+
+        // Aktualna pozycja GPS (rozowy)
+        if (mapCurrentPos.x != null && mapCurrentPos.y != null) {
+            drawGpsMarker(ctx, w, h);
+        }
+
         drawMapScale(ctx, w, h);
     }
 
     function worldToScreen(worldY, worldX) {
-        // worldY = easting (PL-2000 Y) -> ekranowa os X
-        // worldX = northing (PL-2000 X) -> ekranowa os Y (odwrocona)
         var sx = (worldY - mapView.cx) * mapView.scale + mapView.w / 2;
         var sy = mapView.h / 2 - (worldX - mapView.cy) * mapView.scale;
         return [sx, sy];
     }
 
     function drawMapGrid(ctx, w, h) {
-        // Oblicz odpowiedni krok siatki
         var pixPerMeter = mapView.scale;
         var steps = [0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 5000];
         var gridStep = 100;
         for (var i = 0; i < steps.length; i++) {
-            if (steps[i] * pixPerMeter > 40) {
-                gridStep = steps[i];
-                break;
-            }
+            if (steps[i] * pixPerMeter > 40) { gridStep = steps[i]; break; }
         }
 
-        // Zakres widoczny
         var halfW = w / 2 / pixPerMeter;
         var halfH = h / 2 / pixPerMeter;
         var left = mapView.cx - halfW;
@@ -1184,27 +1275,20 @@
         ctx.strokeStyle = "rgba(255,255,255,0.06)";
         ctx.lineWidth = 1;
 
-        // Pionowe (easting)
         var startE = Math.floor(left / gridStep) * gridStep;
         for (var e = startE; e <= right; e += gridStep) {
             var sx = (e - mapView.cx) * pixPerMeter + w / 2;
-            ctx.beginPath();
-            ctx.moveTo(sx, 0);
-            ctx.lineTo(sx, h);
-            ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, h); ctx.stroke();
         }
 
-        // Poziome (northing)
         var startN = Math.floor(bottom / gridStep) * gridStep;
         for (var n = startN; n <= top; n += gridStep) {
             var sy = h / 2 - (n - mapView.cy) * pixPerMeter;
-            ctx.beginPath();
-            ctx.moveTo(0, sy);
-            ctx.lineTo(w, sy);
-            ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(w, sy); ctx.stroke();
         }
     }
 
+    // Punkty projektu - CIEMNONIEBIESKI (#1565c0)
     function drawMapPoints(ctx, w, h) {
         for (var i = 0; i < mapPoints.length; i++) {
             var p = mapPoints[i];
@@ -1212,27 +1296,93 @@
 
             var pos = worldToScreen(p.y, p.x);
             var sx = pos[0], sy = pos[1];
-
-            // Poza ekranem?
             if (sx < -20 || sx > w + 20 || sy < -20 || sy > h + 20) continue;
 
-            // Punkt
-            ctx.fillStyle = "#4fc3f7";
+            // Punkt - ciemnoniebieski
+            ctx.fillStyle = "#1565c0";
             ctx.beginPath();
             ctx.arc(sx, sy, 5, 0, Math.PI * 2);
             ctx.fill();
-
-            // Obwodka
-            ctx.strokeStyle = "#fff";
+            ctx.strokeStyle = "#90caf9";
             ctx.lineWidth = 1.5;
             ctx.stroke();
 
             // Etykieta
-            ctx.fillStyle = "#e0e8f0";
+            ctx.fillStyle = "#bbdefb";
             ctx.font = "11px sans-serif";
             ctx.textAlign = "left";
             ctx.fillText(p.name || p.id, sx + 8, sy - 4);
         }
+    }
+
+    // Cel wytyczania - JASNONIEBIESKI (#4fc3f7) z ikona celu
+    function drawStakeoutMarker(ctx, w, h) {
+        var pos = worldToScreen(mapStakeoutTarget.y, mapStakeoutTarget.x);
+        var sx = pos[0], sy = pos[1];
+
+        // Krzyzyk celownika
+        var r = 12;
+        ctx.strokeStyle = "#4fc3f7";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(sx - r - 4, sy); ctx.lineTo(sx + r + 4, sy);
+        ctx.moveTo(sx, sy - r - 4); ctx.lineTo(sx, sy + r + 4);
+        ctx.stroke();
+
+        // Srodek
+        ctx.fillStyle = "#4fc3f7";
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Etykieta
+        if (mapStakeoutTarget.name) {
+            ctx.fillStyle = "#4fc3f7";
+            ctx.font = "bold 11px sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText(mapStakeoutTarget.name, sx, sy - r - 6);
+        }
+    }
+
+    // Aktualna pozycja GPS - ROZOWY (#ff69b4) z pulsujacym pierscieniem
+    function drawGpsMarker(ctx, w, h) {
+        var pos = worldToScreen(mapCurrentPos.y, mapCurrentPos.x);
+        var sx = pos[0], sy = pos[1];
+
+        // Pulsujacy pierscien (animacja na bazie czasu)
+        var pulse = Math.sin(Date.now() / 400) * 0.3 + 0.7;  // 0.4 - 1.0
+        var outerR = 14 * pulse;
+        ctx.strokeStyle = "rgba(255, 105, 180, " + (0.4 * pulse) + ")";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, outerR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Wewnetrzna poswaiata
+        ctx.fillStyle = "rgba(255, 105, 180, 0.2)";
+        ctx.beginPath();
+        ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Glowny punkt rozowy
+        ctx.fillStyle = "#ff69b4";
+        ctx.beginPath();
+        ctx.arc(sx, sy, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Biala obwodka
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Etykieta
+        ctx.fillStyle = "#ff69b4";
+        ctx.font = "bold 10px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("GPS", sx, sy - 14);
     }
 
     function drawDxfEntities(ctx, w, h) {
@@ -1248,10 +1398,7 @@
             if (e.type === 'line') {
                 var p1 = worldToScreen(e.y1, e.x1);
                 var p2 = worldToScreen(e.y2, e.x2);
-                ctx.beginPath();
-                ctx.moveTo(p1[0], p1[1]);
-                ctx.lineTo(p2[0], p2[1]);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
             } else if (e.type === 'polyline' && e.points && e.points.length > 1) {
                 ctx.beginPath();
                 var first = worldToScreen(e.points[0][1], e.points[0][0]);
@@ -1264,16 +1411,12 @@
                 ctx.stroke();
             } else if (e.type === 'point') {
                 var pp = worldToScreen(e.y, e.x);
-                ctx.beginPath();
-                ctx.arc(pp[0], pp[1], 3, 0, Math.PI * 2);
-                ctx.fill();
+                ctx.beginPath(); ctx.arc(pp[0], pp[1], 3, 0, Math.PI * 2); ctx.fill();
             } else if (e.type === 'circle') {
                 var cc = worldToScreen(e.cy, e.cx);
                 var rPx = e.r * mapView.scale;
                 if (rPx > 0.5 && rPx < 5000) {
-                    ctx.beginPath();
-                    ctx.arc(cc[0], cc[1], rPx, 0, Math.PI * 2);
-                    ctx.stroke();
+                    ctx.beginPath(); ctx.arc(cc[0], cc[1], rPx, 0, Math.PI * 2); ctx.stroke();
                 }
             } else if (e.type === 'arc') {
                 var ac = worldToScreen(e.cy, e.cx);
@@ -1281,9 +1424,7 @@
                 if (arPx > 0.5 && arPx < 5000) {
                     var sa = -e.end_angle * Math.PI / 180;
                     var ea = -e.start_angle * Math.PI / 180;
-                    ctx.beginPath();
-                    ctx.arc(ac[0], ac[1], arPx, sa, ea);
-                    ctx.stroke();
+                    ctx.beginPath(); ctx.arc(ac[0], ac[1], arPx, sa, ea); ctx.stroke();
                 }
             } else if (e.type === 'text') {
                 var tp = worldToScreen(e.y, e.x);
@@ -1297,19 +1438,14 @@
     }
 
     function drawMapScale(ctx, w, h) {
-        // Belka skali w lewym dolnym rogu
         var pixPerMeter = mapView.scale;
         var targetPx = 100;
         var dist = targetPx / pixPerMeter;
 
-        // Zaokraglij do ladnej wartosci
         var niceVals = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
         var niceDist = niceVals[niceVals.length - 1];
         for (var i = 0; i < niceVals.length; i++) {
-            if (niceVals[i] >= dist * 0.5) {
-                niceDist = niceVals[i];
-                break;
-            }
+            if (niceVals[i] >= dist * 0.5) { niceDist = niceVals[i]; break; }
         }
         var barPx = niceDist * pixPerMeter;
 
@@ -1317,12 +1453,9 @@
         ctx.strokeStyle = "#8899aa";
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x0 + barPx, y0);
-        ctx.moveTo(x0, y0 - 4);
-        ctx.lineTo(x0, y0 + 4);
-        ctx.moveTo(x0 + barPx, y0 - 4);
-        ctx.lineTo(x0 + barPx, y0 + 4);
+        ctx.moveTo(x0, y0); ctx.lineTo(x0 + barPx, y0);
+        ctx.moveTo(x0, y0 - 4); ctx.lineTo(x0, y0 + 4);
+        ctx.moveTo(x0 + barPx, y0 - 4); ctx.lineTo(x0 + barPx, y0 + 4);
         ctx.stroke();
 
         ctx.fillStyle = "#8899aa";
@@ -1331,7 +1464,6 @@
         var label = niceDist >= 1000 ? (niceDist / 1000) + " km" : niceDist + " m";
         ctx.fillText(label, x0 + barPx / 2, y0 - 6);
 
-        // Info skali
         var scaleEl = document.getElementById("map-scale");
         if (scaleEl) scaleEl.textContent = "1px = " + (1 / pixPerMeter).toFixed(2) + " m";
     }

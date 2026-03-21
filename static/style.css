@@ -549,3 +549,8 @@ footer {
     margin-top: 4px;
     font-variant-numeric: tabular-nums;
 }
+
+.btn-map-gps { color: #ff69b4 !important; border-color: #ff69b4 !important; }
+.btn-map-gps:hover { background: rgba(255,105,180,0.15) !important; }
+.btn-map-stake { color: var(--accent) !important; border-color: var(--accent) !important; }
+.btn-map-stake:hover { background: rgba(79,195,247,0.15) !important; }

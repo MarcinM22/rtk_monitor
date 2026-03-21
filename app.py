@@ -249,6 +249,20 @@ def api_status():
     # Temperatura CPU
     cpu_temp = get_cpu_temp()
 
+    # Aktualna pozycja PL-2000 (dla mapy)
+    cur_x_pl = None
+    cur_y_pl = None
+    lat = gps_data.get('latitude')
+    lon = gps_data.get('longitude')
+    if lat is not None and lon is not None:
+        try:
+            cur_x_pl, cur_y_pl = surveyor.converter.wgs84_to_pl2000(lat, lon)
+            if cur_x_pl is not None:
+                cur_x_pl = round(cur_x_pl, 3)
+                cur_y_pl = round(cur_y_pl, 3)
+        except Exception:
+            pass
+
     return jsonify({
         'fix_quality': fq,
         'fix_label': fix_labels.get(fq, 'Typ %d' % fq),
@@ -278,6 +292,8 @@ def api_status():
         'accuracy_v': acc_v,
         'cpu_temp': cpu_temp,
         'antenna_height': config.get('antenna_height', 0.0),
+        'cur_x_pl': cur_x_pl,
+        'cur_y_pl': cur_y_pl,
     })
 
 

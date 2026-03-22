@@ -10,6 +10,10 @@ import json
 import signal
 import logging
 import subprocess
+import xml.etree.ElementTree as ET
+from urllib.request import urlopen, Request
+from urllib.error import URLError, HTTPError
+from urllib.parse import urlencode, urlparse, parse_qs, urljoin
 
 from flask import Flask, render_template, request, jsonify, send_from_directory
 
@@ -535,6 +539,52 @@ def upload_dxf():
         return jsonify({'status': 'ok', 'message': 'Plik %s wgrany' % safe_name})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# === WFS Proxy ===
+
+@app.route('/api/wfs/capabilities', methods=['GET'])
+def wfs_capabilities():
+    """Proxy: GetCapabilities z serwera WFS."""
+    wfs_url = request.args.get('url', '')
+    if not wfs_url:
+        return jsonify({'error': 'Podaj URL serwera WFS'}), 400
+
+    try:
+        from wfs_proxy import get_capabilities
+        result = get_capabilities(wfs_url)
+        return jsonify(result)
+    except Exception as e:
+        logger.error("WFS capabilities error: %s", e)
+        return jsonify({'error': str(e), 'layers': []}), 502
+
+
+@app.route('/api/wfs/features', methods=['GET'])
+def wfs_features():
+    """Proxy: GetFeature z serwera WFS z BBOX."""
+    wfs_url = request.args.get('url', '')
+    layers = request.args.get('layers', '')
+    bbox = request.args.get('bbox', '')
+    srs = request.args.get('srs', 'EPSG:2177')
+    version = request.args.get('version', '1.1.0')
+
+    if not wfs_url or not layers or not bbox:
+        return jsonify({'error': 'Wymagane: url, layers, bbox'}), 400
+
+    try:
+        parts = [float(x) for x in bbox.split(',')]
+        if len(parts) != 4:
+            raise ValueError("BBOX wymaga 4 wartosci")
+    except ValueError as e:
+        return jsonify({'error': 'Nieprawidlowy BBOX: %s' % e}), 400
+
+    try:
+        from wfs_proxy import get_features
+        result = get_features(wfs_url, layers.split(','), tuple(parts), srs, version)
+        return jsonify(result)
+    except Exception as e:
+        logger.error("WFS features error: %s", e)
+        return jsonify({'error': str(e), 'features': []}), 502
 
 
 # === Main ===

@@ -582,3 +582,89 @@ footer {
 .btn-map-gps:hover { background: rgba(255,105,180,0.15) !important; }
 .btn-map-stake { color: var(--accent) !important; border-color: var(--accent) !important; }
 .btn-map-stake:hover { background: rgba(79,195,247,0.15) !important; }
+
+/* WFS Panel */
+.wfs-panel {
+    margin-top: 8px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+}
+
+.wfs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.wfs-url-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.wfs-url-row input {
+    flex: 1;
+    padding: 6px 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.78rem;
+}
+
+.wfs-url-row input:focus { outline: none; border-color: var(--accent); }
+
+.btn-wfs-connect {
+    color: var(--green) !important;
+    border-color: var(--green) !important;
+    white-space: nowrap;
+}
+
+.wfs-error {
+    margin-top: 6px;
+    padding: 4px 8px;
+    background: rgba(239,83,80,0.1);
+    border-radius: 4px;
+    color: var(--red);
+    font-size: 0.78rem;
+}
+
+.wfs-layers {
+    margin-top: 8px;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.wfs-layer-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+
+.wfs-layer-item:hover { color: var(--text); }
+
+.wfs-layer-item input { cursor: pointer; }
+
+.wfs-layer-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wfs-scale-notice {
+    margin-top: 6px;
+    padding: 4px 8px;
+    background: rgba(255,167,38,0.1);
+    border-radius: 4px;
+    color: var(--yellow);
+    font-size: 0.72rem;
+    text-align: center;
+}

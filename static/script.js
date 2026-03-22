@@ -1330,6 +1330,9 @@
 
         if (mapDxfEntities.length > 0) drawDxfEntities(ctx, w, h);
 
+        // WFS features (cyjan)
+        if (wfsFeatures.length > 0) drawWfsFeatures(ctx, w, h);
+
         // Punkty projektu (ciemnoniebieski)
         var showPts = document.getElementById("map-show-points");
         if (showPts && showPts.checked && mapPoints.length > 0) {
@@ -1347,6 +1350,9 @@
         }
 
         drawMapScale(ctx, w, h);
+
+        // Odswierz WFS jesli potrzeba (debounced)
+        scheduleWfsRefresh();
     }
 
     function worldToScreen(worldY, worldX) {
@@ -1582,6 +1588,242 @@
         }
     }
 
+    // ===================================================================
+    //  WFS - Web Feature Service
+    //  Wczytuje warstwy wektorowe z serwera WFS (przez proxy backend)
+    //  Ograniczenie: skala <= 1:2000
+    // ===================================================================
+
+    var wfsUrl = "";
+    var wfsVersion = "1.1.0";
+    var wfsLayers = [];         // [{name, title, srs, enabled}]
+    var wfsFeatures = [];       // sparsowane features do rysowania
+    var wfsPanelOpen = false;
+    var wfsRefreshTimer = null;
+    var wfsLastBbox = "";       // cache - nie pobieraj ponownie tego samego zakresu
+    var wfsLoading = false;
+
+    var WFS_MAX_SCALE = 2000;   // nie pobieraj powyzej 1:2000
+
+    function setupWfsPanel() {
+        var toggleBtn = document.getElementById("btn-wfs-toggle");
+        if (toggleBtn) {
+            toggleBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                wfsPanelOpen = !wfsPanelOpen;
+                var panel = document.getElementById("wfs-settings");
+                if (panel) {
+                    if (wfsPanelOpen) {
+                        panel.classList.remove("hidden");
+                        toggleBtn.textContent = "Zwin";
+                    } else {
+                        panel.classList.add("hidden");
+                        toggleBtn.textContent = "Rozwin";
+                    }
+                }
+            });
+        }
+
+        var connectBtn = document.getElementById("btn-wfs-connect");
+        if (connectBtn) {
+            connectBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                wfsConnect();
+            });
+        }
+    }
+
+    function wfsConnect() {
+        var urlInput = document.getElementById("wfs-url");
+        var errEl = document.getElementById("wfs-error");
+        var layersEl = document.getElementById("wfs-layers");
+        if (!urlInput) return;
+
+        wfsUrl = urlInput.value.trim();
+        if (!wfsUrl) {
+            if (errEl) { errEl.textContent = "Podaj URL"; errEl.classList.remove("hidden"); }
+            return;
+        }
+
+        if (errEl) errEl.classList.add("hidden");
+        if (layersEl) layersEl.innerHTML = '<div style="color:var(--text-dim);font-size:0.78rem">Laczenie...</div>';
+
+        fetch("/api/wfs/capabilities?url=" + encodeURIComponent(wfsUrl))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) {
+                    if (errEl) { errEl.textContent = data.error; errEl.classList.remove("hidden"); }
+                    if (layersEl) layersEl.innerHTML = "";
+                    return;
+                }
+
+                wfsVersion = data.version || "1.1.0";
+                wfsLayers = [];
+
+                if (!data.layers || data.layers.length === 0) {
+                    if (layersEl) layersEl.innerHTML = '<div style="color:var(--text-dim);font-size:0.78rem">Brak warstw</div>';
+                    return;
+                }
+
+                // Buduj liste warstw z checkboxami
+                var html = '<div class="wfs-scale-notice">Dane WFS wczytywane tylko w skali &le; 1:' + WFS_MAX_SCALE + '</div>';
+                for (var i = 0; i < data.layers.length; i++) {
+                    var l = data.layers[i];
+                    wfsLayers.push({ name: l.name, title: l.title, srs: l.srs, enabled: false });
+                    html += '<label class="wfs-layer-item">';
+                    html += '<input type="checkbox" data-wfs-idx="' + i + '" class="wfs-layer-cb">';
+                    html += '<span class="wfs-layer-name" title="' + l.name + '">' + l.title + '</span>';
+                    html += '</label>';
+                }
+                if (layersEl) {
+                    layersEl.innerHTML = html;
+                    // Dodaj eventy checkboxow
+                    var cbs = layersEl.querySelectorAll(".wfs-layer-cb");
+                    for (var j = 0; j < cbs.length; j++) {
+                        cbs[j].addEventListener("change", function() {
+                            var idx = parseInt(this.getAttribute("data-wfs-idx"));
+                            if (wfsLayers[idx]) {
+                                wfsLayers[idx].enabled = this.checked;
+                            }
+                            wfsLastBbox = "";  // wymus przeladowanie
+                            wfsFeatures = [];
+                            scheduleWfsRefresh(true);
+                        });
+                    }
+                }
+
+                if (data.title) {
+                    var titleEl = document.querySelector(".wfs-header span");
+                    if (titleEl) titleEl.textContent = "WFS: " + data.title.substring(0, 40);
+                }
+            })
+            .catch(function(e) {
+                if (errEl) { errEl.textContent = "Blad polaczenia: " + e; errEl.classList.remove("hidden"); }
+                if (layersEl) layersEl.innerHTML = "";
+            });
+    }
+
+    function getWfsEnabledLayers() {
+        var names = [];
+        for (var i = 0; i < wfsLayers.length; i++) {
+            if (wfsLayers[i].enabled) names.push(wfsLayers[i].name);
+        }
+        return names;
+    }
+
+    function getMapScaleDenom() {
+        // Skala kartograficzna: 96 DPI = 0.264 mm/px
+        var pixSizeM = 0.000264;
+        return Math.round(1 / (mapView.scale * pixSizeM));
+    }
+
+    function getMapBbox() {
+        // Zwroc widoczny zakres w PL-2000 [min_easting, min_northing, max_easting, max_northing]
+        var halfW = mapView.w / 2 / mapView.scale;
+        var halfH = mapView.h / 2 / mapView.scale;
+        return [
+            mapView.cx - halfW,  // min easting
+            mapView.cy - halfH,  // min northing
+            mapView.cx + halfW,  // max easting
+            mapView.cy + halfH   // max northing
+        ];
+    }
+
+    function scheduleWfsRefresh(force) {
+        if (wfsRefreshTimer) clearTimeout(wfsRefreshTimer);
+
+        var enabledLayers = getWfsEnabledLayers();
+        if (enabledLayers.length === 0) {
+            updateWfsStatus("");
+            return;
+        }
+
+        var scaleDenom = getMapScaleDenom();
+        if (scaleDenom > WFS_MAX_SCALE) {
+            updateWfsStatus("WFS: przybliz do 1:" + WFS_MAX_SCALE);
+            // Wyczysc features jesli skala za duza
+            if (wfsFeatures.length > 0) {
+                wfsFeatures = [];
+                drawMap();
+            }
+            return;
+        }
+
+        // Sprawdz czy bbox sie zmienil (zaokraglij zeby uniknac ciaglego przeladowania)
+        var bbox = getMapBbox();
+        var bboxKey = bbox.map(function(v) { return v.toFixed(0); }).join(",");
+        if (!force && bboxKey === wfsLastBbox) return;
+
+        // Debounce: 500ms po ostatnim ruchu mapy
+        wfsRefreshTimer = setTimeout(function() {
+            fetchWfsFeatures(enabledLayers, bbox, bboxKey);
+        }, 500);
+    }
+
+    function fetchWfsFeatures(layers, bbox, bboxKey) {
+        if (wfsLoading) return;
+        wfsLoading = true;
+        updateWfsStatus("WFS: wczytywanie...");
+
+        var params = "url=" + encodeURIComponent(wfsUrl) +
+            "&layers=" + encodeURIComponent(layers.join(",")) +
+            "&bbox=" + bbox.join(",") +
+            "&srs=EPSG:2177" +
+            "&version=" + encodeURIComponent(wfsVersion);
+
+        fetch("/api/wfs/features?" + params)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                wfsLoading = false;
+                if (data.error) {
+                    updateWfsStatus("WFS: " + data.error);
+                    return;
+                }
+                wfsFeatures = data.features || [];
+                wfsLastBbox = bboxKey;
+                updateWfsStatus("WFS: " + wfsFeatures.length + " obj.");
+                drawMap();
+            })
+            .catch(function(e) {
+                wfsLoading = false;
+                updateWfsStatus("WFS: blad");
+            });
+    }
+
+    function updateWfsStatus(text) {
+        var el = document.getElementById("map-wfs-status");
+        if (el) el.textContent = text;
+    }
+
+    function drawWfsFeatures(ctx, w, h) {
+        ctx.strokeStyle = "#00e5ff";
+        ctx.lineWidth = 1.5;
+        ctx.fillStyle = "#00e5ff";
+
+        for (var i = 0; i < wfsFeatures.length; i++) {
+            var f = wfsFeatures[i];
+
+            if (f.type === 'polyline' && f.coords && f.coords.length > 1) {
+                // coords: [[easting, northing], ...]
+                ctx.beginPath();
+                var p0 = worldToScreen(f.coords[0][0], f.coords[0][1]);
+                ctx.moveTo(p0[0], p0[1]);
+                for (var j = 1; j < f.coords.length; j++) {
+                    var pj = worldToScreen(f.coords[j][0], f.coords[j][1]);
+                    ctx.lineTo(pj[0], pj[1]);
+                }
+                if (f.closed) ctx.closePath();
+                ctx.stroke();
+            } else if (f.type === 'point') {
+                var pp = worldToScreen(f.x, f.y);
+                ctx.beginPath();
+                ctx.arc(pp[0], pp[1], 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+
+
     // === Init ===
 
     function init() {
@@ -1592,6 +1834,7 @@
         setupStakeoutPanel();
         setupPointsPanel();
         setupMapPanel();
+        setupWfsPanel();
         loadConfig();
         startPolling();
     }

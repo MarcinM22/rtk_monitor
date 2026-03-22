@@ -249,7 +249,24 @@
                 <canvas id="map-canvas" width="580" height="400"></canvas>
                 <div class="map-info">
                     <span id="map-coords"></span>
+                    <span id="map-wfs-status"></span>
                     <span id="map-scale"></span>
+                </div>
+
+                <!-- Panel WFS -->
+                <div class="wfs-panel">
+                    <div class="wfs-header">
+                        <span>WFS</span>
+                        <button class="btn-small" id="btn-wfs-toggle">Rozwin</button>
+                    </div>
+                    <div id="wfs-settings" class="hidden">
+                        <div class="wfs-url-row">
+                            <input type="text" id="wfs-url" placeholder="URL serwera WFS (GetCapabilities)">
+                            <button class="btn-small btn-wfs-connect" id="btn-wfs-connect">Polacz</button>
+                        </div>
+                        <div id="wfs-error" class="wfs-error hidden"></div>
+                        <div id="wfs-layers" class="wfs-layers"></div>
+                    </div>
                 </div>
             </div>
         </section>

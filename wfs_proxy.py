@@ -55,23 +55,25 @@ def _fetch_url(url, timeout=WFS_TIMEOUT):
 
 
 def _build_wfs_url(base_url, params):
-    """Zbuduj URL WFS z parametrami, zachowujac istniejace."""
+    """Zbuduj URL WFS z parametrami, zachowujac istniejace.
+    Nowe params nadpisuja istniejace (case-insensitive).
+    """
+    from urllib.parse import quote
     parsed = urlparse(base_url)
     existing = parse_qs(parsed.query, keep_blank_values=True)
 
-    # Merge - nowe params nadpisuja istniejace (case-insensitive)
-    existing_upper = {k.upper(): v for k, v in existing.items()}
+    merged = {}
+    for k, v in existing.items():
+        merged[k.upper()] = v
     for k, v in params.items():
-        existing_upper[k.upper()] = [v] if isinstance(v, str) else v
+        merged[k.upper()] = [v] if isinstance(v, str) else v
 
-    # Zbuduj query string
     query_parts = []
-    for k, vals in existing_upper.items():
+    for k, vals in merged.items():
         for v in vals:
-            query_parts.append('%s=%s' % (k, v))
+            query_parts.append('%s=%s' % (k, quote(str(v), safe=',.:/')))
     query = '&'.join(query_parts)
 
-    # Odbuduj URL
     base = parsed._replace(query='').geturl()
     return base + '?' + query
 
@@ -170,56 +172,104 @@ def get_capabilities(wfs_url):
 def get_features(wfs_url, layer_names, bbox, srs='EPSG:2177', version='1.1.0'):
     """Pobierz features z BBOX.
 
+    Automatycznie probuje rozne warianty BBOX i SRSNAME
+    jesli pierwszy nie zwroci wynikow (typowy problem z polskimi WFS).
+
     Args:
         wfs_url: bazowy URL WFS
-        layer_names: lista nazw warstw (lub string z przecinkami)
+        layer_names: lista nazw warstw
         bbox: (min_easting, min_northing, max_easting, max_northing) - PL-2000
         srs: uklad odniesienia
         version: wersja WFS
 
     Returns:
-        {'features': [{'type': 'line', 'coords': [[e,n],[e,n],...]}, ...]}
+        {'features': [...], 'count': N, 'debug': '...'}
     """
     if isinstance(layer_names, list):
         layer_names = ','.join(layer_names)
 
-    # BBOX: minx,miny,maxx,maxy - w PL-2000 to easting,northing
-    # Ale WFS 1.1+ z EPSG:2177 moze oczekiwac northing,easting
-    # Probujemy oba formaty - najpierw easting,northing (czesciej dziala)
-    bbox_str = '%.3f,%.3f,%.3f,%.3f' % (bbox[0], bbox[1], bbox[2], bbox[3])
+    min_e, min_n, max_e, max_n = bbox
 
-    params = {
-        'SERVICE': 'WFS',
-        'REQUEST': 'GetFeature',
-        'TYPENAME': layer_names,
-        'SRSNAME': srs,
-        'BBOX': bbox_str,
-        'MAXFEATURES': str(MAX_FEATURES),
+    # Warianty BBOX: WFS 1.1+ z EPSG:2177 wg spec wymaga northing,easting
+    # ale wiele serwerow chce easting,northing. Probujemy oba.
+    bbox_variants = [
+        ('%.3f,%.3f,%.3f,%.3f' % (min_e, min_n, max_e, max_n), 'e,n'),
+        ('%.3f,%.3f,%.3f,%.3f' % (min_n, min_e, max_n, max_e), 'n,e'),
+    ]
+
+    # Warianty SRSNAME: EPSG:2177 vs urn:ogc:def:crs:EPSG::2177
+    srs_variants = [srs]
+    if srs.startswith('EPSG:'):
+        code = srs.split(':')[1]
+        srs_variants.append('urn:ogc:def:crs:EPSG::%s' % code)
+
+    # TYPENAME vs TYPENAMES (WFS 2.0)
+    typename_key = 'TYPENAMES' if version.startswith('2') else 'TYPENAME'
+
+    debug_info = []
+
+    for srs_var in srs_variants:
+        for bbox_str, bbox_label in bbox_variants:
+            params = {
+                'SERVICE': 'WFS',
+                'REQUEST': 'GetFeature',
+                typename_key: layer_names,
+                'SRSNAME': srs_var,
+                'BBOX': bbox_str,
+                'MAXFEATURES': str(MAX_FEATURES),
+                'VERSION': version,
+            }
+
+            url = _build_wfs_url(wfs_url, params)
+            attempt = "srs=%s bbox=%s" % (srs_var[:20], bbox_label)
+            logger.info("WFS GetFeature [%s]: %s", attempt, url[:200])
+            debug_info.append(attempt)
+
+            try:
+                xml_text = _fetch_url(url)
+            except Exception as e:
+                debug_info[-1] += " ERR:%s" % str(e)[:40]
+                continue
+
+            # Sprawdz ExceptionReport
+            if '<ExceptionReport' in xml_text or '<ServiceException' in xml_text:
+                try:
+                    err_root = ET.fromstring(xml_text)
+                    err_elem = _find_elem(err_root, 'ExceptionText') or _find_elem(err_root, 'ServiceException')
+                    err_msg = err_elem.text.strip()[:80] if err_elem is not None and err_elem.text else '?'
+                    debug_info[-1] += " EXC:%s" % err_msg
+                    logger.warning("WFS Exception [%s]: %s", attempt, err_msg)
+                except Exception:
+                    debug_info[-1] += " EXC:?"
+                continue
+
+            # Parsuj GML
+            try:
+                root = ET.fromstring(xml_text)
+            except ET.ParseError as e:
+                debug_info[-1] += " XML_ERR"
+                continue
+
+            features = _parse_gml_features(root)
+
+            if features:
+                features = _fix_coordinate_order(features)
+                logger.info("WFS OK: %d features [%s]", len(features), attempt)
+                return {
+                    'features': features,
+                    'count': len(features),
+                    'debug': ' | '.join(debug_info),
+                }
+
+            debug_info[-1] += " 0feat"
+
+    # Zaden wariant nie zwrocil danych
+    logger.warning("WFS: brak wynikow (%d prob)", len(debug_info))
+    return {
+        'features': [],
+        'count': 0,
+        'debug': ' | '.join(debug_info),
     }
-
-    # Dodaj wersje jesli != 1.0
-    if version and version != '1.0.0':
-        params['VERSION'] = version
-
-    url = _build_wfs_url(wfs_url, params)
-
-    logger.info("WFS GetFeature: layers=%s bbox=%s", layer_names, bbox_str)
-    xml_text = _fetch_url(url)
-
-    # Parsuj GML
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError as e:
-        logger.error("WFS: blad parsowania GML: %s", e)
-        return {'features': [], 'error': 'Blad parsowania GML'}
-
-    features = _parse_gml_features(root)
-
-    # Auto-detect i napraw kolejnosc wspolrzednych
-    features = _fix_coordinate_order(features)
-
-    logger.info("WFS: %d features sparsowanych", len(features))
-    return {'features': features, 'count': len(features)}
 
 
 def _parse_gml_features(root):

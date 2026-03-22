@@ -1781,12 +1781,16 @@
                 }
                 wfsFeatures = data.features || [];
                 wfsLastBbox = bboxKey;
-                updateWfsStatus("WFS: " + wfsFeatures.length + " obj.");
+                var status = "WFS: " + wfsFeatures.length + " obj.";
+                if (wfsFeatures.length === 0 && data.debug) {
+                    status += " [" + data.debug + "]";
+                }
+                updateWfsStatus(status);
                 drawMap();
             })
             .catch(function(e) {
                 wfsLoading = false;
-                updateWfsStatus("WFS: blad");
+                updateWfsStatus("WFS: blad sieci");
             });
     }
 

@@ -576,6 +576,17 @@ footer {
     color: var(--text-dim);
     margin-top: 4px;
     font-variant-numeric: tabular-nums;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+#map-wfs-status {
+    color: #00e5ff;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.68rem;
 }
 
 .btn-map-gps { color: #ff69b4 !important; border-color: #ff69b4 !important; }

@@ -910,6 +910,33 @@
     var mapDrag = { active: false, startX: 0, startY: 0, startCx: 0, startCy: 0 };
     var mapPinch = { active: false, startDist: 0, startScale: 0 };
 
+    // Tryb jasny/ciemny
+    var mapDarkMode = true;
+    var mapThemes = {
+        dark: {
+            bg: "#0a1520", grid: "rgba(255,255,255,0.06)",
+            scaleLine: "#8899aa", scaleText: "#8899aa",
+            ptFill: "#1565c0", ptStroke: "#90caf9", ptLabel: "#bbdefb",
+            dxfLine: "#ffa726", dxfText: "#ffa726",
+            wfsLine: "#00e5ff", wfsFill: "#00e5ff",
+            gpsGlow: "rgba(255,105,180,0.2)", gpsFill: "#ff69b4", gpsLabel: "#ff69b4",
+            stakeLine: "#4fc3f7", stakeFill: "#4fc3f7",
+            coordText: "#8899aa",
+        },
+        light: {
+            bg: "#f5f5f5", grid: "rgba(0,0,0,0.08)",
+            scaleLine: "#555", scaleText: "#555",
+            ptFill: "#1565c0", ptStroke: "#0d47a1", ptLabel: "#1a237e",
+            dxfLine: "#e65100", dxfText: "#bf360c",
+            wfsLine: "#0077b6", wfsFill: "#0077b6",
+            gpsGlow: "rgba(233,30,99,0.15)", gpsFill: "#e91e63", gpsLabel: "#c2185b",
+            stakeLine: "#0288d1", stakeFill: "#0288d1",
+            coordText: "#666",
+        }
+    };
+
+    function T() { return mapDarkMode ? mapThemes.dark : mapThemes.light; }
+
     function setupMapPanel() {
         var toggleBtn = document.getElementById("map-toggle");
         if (toggleBtn) {
@@ -997,6 +1024,18 @@
         var showPts = document.getElementById("map-show-points");
         if (showPts) {
             showPts.addEventListener("change", function() { drawMap(); });
+        }
+
+        // Tryb jasny/ciemny
+        var themeBtn = document.getElementById("btn-map-theme");
+        if (themeBtn) {
+            themeBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                mapDarkMode = !mapDarkMode;
+                themeBtn.textContent = mapDarkMode ? "\u2600" : "\u263E";
+                themeBtn.title = mapDarkMode ? "Tryb jasny" : "Tryb ciemny";
+                drawMap();
+            });
         }
     }
 
@@ -1323,7 +1362,7 @@
         var w = mapView.w;
         var h = mapView.h;
 
-        ctx.fillStyle = "#0a1520";
+        ctx.fillStyle = T().bg;
         ctx.fillRect(0, 0, w, h);
 
         // WMS raster (pod spodem)
@@ -1379,7 +1418,7 @@
         var bottom = mapView.cy - halfH;
         var top = mapView.cy + halfH;
 
-        ctx.strokeStyle = "rgba(255,255,255,0.06)";
+        ctx.strokeStyle = T().grid;
         ctx.lineWidth = 1;
 
         var startE = Math.floor(left / gridStep) * gridStep;
@@ -1397,6 +1436,7 @@
 
     // Punkty projektu - CIEMNONIEBIESKI (#1565c0)
     function drawMapPoints(ctx, w, h) {
+        var t = T();
         for (var i = 0; i < mapPoints.length; i++) {
             var p = mapPoints[i];
             if (p.x == null || p.y == null) continue;
@@ -1405,31 +1445,28 @@
             var sx = pos[0], sy = pos[1];
             if (sx < -20 || sx > w + 20 || sy < -20 || sy > h + 20) continue;
 
-            // Punkt - ciemnoniebieski
-            ctx.fillStyle = "#1565c0";
+            ctx.fillStyle = t.ptFill;
             ctx.beginPath();
             ctx.arc(sx, sy, 5, 0, Math.PI * 2);
             ctx.fill();
-            ctx.strokeStyle = "#90caf9";
+            ctx.strokeStyle = t.ptStroke;
             ctx.lineWidth = 1.5;
             ctx.stroke();
 
-            // Etykieta
-            ctx.fillStyle = "#bbdefb";
+            ctx.fillStyle = t.ptLabel;
             ctx.font = "11px sans-serif";
             ctx.textAlign = "left";
             ctx.fillText(p.name || p.id, sx + 8, sy - 4);
         }
     }
 
-    // Cel wytyczania - JASNONIEBIESKI (#4fc3f7) z ikona celu
     function drawStakeoutMarker(ctx, w, h) {
+        var t = T();
         var pos = worldToScreen(mapStakeoutTarget.y, mapStakeoutTarget.x);
         var sx = pos[0], sy = pos[1];
 
-        // Krzyzyk celownika
         var r = 12;
-        ctx.strokeStyle = "#4fc3f7";
+        ctx.strokeStyle = t.stakeLine;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
@@ -1439,63 +1476,56 @@
         ctx.moveTo(sx, sy - r - 4); ctx.lineTo(sx, sy + r + 4);
         ctx.stroke();
 
-        // Srodek
-        ctx.fillStyle = "#4fc3f7";
+        ctx.fillStyle = t.stakeFill;
         ctx.beginPath();
         ctx.arc(sx, sy, 3, 0, Math.PI * 2);
         ctx.fill();
 
-        // Etykieta
         if (mapStakeoutTarget.name) {
-            ctx.fillStyle = "#4fc3f7";
+            ctx.fillStyle = t.stakeFill;
             ctx.font = "bold 11px sans-serif";
             ctx.textAlign = "center";
             ctx.fillText(mapStakeoutTarget.name, sx, sy - r - 6);
         }
     }
 
-    // Aktualna pozycja GPS - ROZOWY (#ff69b4) z pulsujacym pierscieniem
     function drawGpsMarker(ctx, w, h) {
+        var t = T();
         var pos = worldToScreen(mapCurrentPos.y, mapCurrentPos.x);
         var sx = pos[0], sy = pos[1];
 
-        // Pulsujacy pierscien (animacja na bazie czasu)
-        var pulse = Math.sin(Date.now() / 400) * 0.3 + 0.7;  // 0.4 - 1.0
+        var pulse = Math.sin(Date.now() / 400) * 0.3 + 0.7;
         var outerR = 14 * pulse;
-        ctx.strokeStyle = "rgba(255, 105, 180, " + (0.4 * pulse) + ")";
+        ctx.strokeStyle = t.gpsGlow.replace("0.2)", (0.4 * pulse) + ")").replace("0.15)", (0.3 * pulse) + ")");
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(sx, sy, outerR, 0, Math.PI * 2);
         ctx.stroke();
 
-        // Wewnetrzna poswaiata
-        ctx.fillStyle = "rgba(255, 105, 180, 0.2)";
+        ctx.fillStyle = t.gpsGlow;
         ctx.beginPath();
         ctx.arc(sx, sy, 10, 0, Math.PI * 2);
         ctx.fill();
 
-        // Glowny punkt rozowy
-        ctx.fillStyle = "#ff69b4";
+        ctx.fillStyle = t.gpsFill;
         ctx.beginPath();
         ctx.arc(sx, sy, 6, 0, Math.PI * 2);
         ctx.fill();
-
-        // Biala obwodka
-        ctx.strokeStyle = "#fff";
+        ctx.strokeStyle = mapDarkMode ? "#fff" : "#333";
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Etykieta
-        ctx.fillStyle = "#ff69b4";
+        ctx.fillStyle = t.gpsLabel;
         ctx.font = "bold 10px sans-serif";
         ctx.textAlign = "center";
         ctx.fillText("GPS", sx, sy - 14);
     }
 
     function drawDxfEntities(ctx, w, h) {
-        ctx.strokeStyle = "#ffa726";
+        var t = T();
+        ctx.strokeStyle = t.dxfLine;
         ctx.lineWidth = 1;
-        ctx.fillStyle = "#ffa726";
+        ctx.fillStyle = t.dxfLine;
 
         for (var i = 0; i < mapDxfEntities.length; i++) {
             var e = mapDxfEntities[i];
@@ -1539,7 +1569,7 @@
                 var tp = worldToScreen(e.x, e.y);
                 var fontSize = Math.max(8, Math.min(14, e.height * mapView.scale));
                 ctx.font = fontSize + "px sans-serif";
-                ctx.fillStyle = "#ffa726";
+                ctx.fillStyle = t.dxfText;
                 ctx.textAlign = "left";
                 ctx.fillText(e.text, tp[0], tp[1]);
             }
@@ -1559,7 +1589,7 @@
         var barPx = niceDist * pixPerMeter;
 
         var x0 = 10, y0 = h - 12;
-        ctx.strokeStyle = "#8899aa";
+        ctx.strokeStyle = T().scaleLine;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(x0, y0); ctx.lineTo(x0 + barPx, y0);
@@ -1567,7 +1597,7 @@
         ctx.moveTo(x0 + barPx, y0 - 4); ctx.lineTo(x0 + barPx, y0 + 4);
         ctx.stroke();
 
-        ctx.fillStyle = "#8899aa";
+        ctx.fillStyle = T().scaleText;
         ctx.font = "10px sans-serif";
         ctx.textAlign = "center";
         var label = niceDist >= 1000 ? (niceDist / 1000) + " km" : niceDist + " m";
@@ -1711,6 +1741,7 @@
                 // Buduj liste warstw
                 var typeLabel = ogcType === "wms" ? "WMS" : "WFS";
                 var html = '<div class="wfs-scale-notice">' + typeLabel + ' - dane wczytywane w skali &le; 1:' + OGC_MAX_SCALE + '</div>';
+                html += '<label class="wfs-layer-item ogc-select-all"><input type="checkbox" id="ogc-select-all-cb"> <b>Zaznacz/Odznacz wszystkie</b></label>';
                 var layerArr = [];
 
                 for (var i = 0; i < layers.length; i++) {
@@ -1739,6 +1770,22 @@
                             var arr = ogcType === "wms" ? wmsLayers : wfsLayers;
                             if (arr[idx]) arr[idx].enabled = this.checked;
                             // Wymus przeladowanie
+                            wfsLastBbox = "";
+                            wfsFeatures = [];
+                            wmsLastBbox = "";
+                            wmsImageReady = false;
+                            scheduleOgcRefresh(true);
+                        });
+                    }
+                    // Zaznacz/Odznacz wszystkie
+                    var selectAllCb = document.getElementById("ogc-select-all-cb");
+                    if (selectAllCb) {
+                        selectAllCb.addEventListener("change", function() {
+                            var checked = this.checked;
+                            var arr = ogcType === "wms" ? wmsLayers : wfsLayers;
+                            for (var k = 0; k < arr.length; k++) arr[k].enabled = checked;
+                            var allCbs = layersEl.querySelectorAll(".ogc-layer-cb");
+                            for (var m = 0; m < allCbs.length; m++) allCbs[m].checked = checked;
                             wfsLastBbox = "";
                             wfsFeatures = [];
                             wmsLastBbox = "";
@@ -1878,7 +1925,6 @@
         wmsLoading = true;
         updateOgcStatus("WMS: wczytywanie...");
 
-        // Rozmiar obrazu = rozmiar canvas
         var w = mapView.w;
         var h = mapView.h;
 
@@ -1890,25 +1936,125 @@
             "&srs=EPSG:2177&version=" + encodeURIComponent(ogcVersion) +
             "&format=image/png";
 
-        var img = new Image();
-        img.crossOrigin = "anonymous";
+        fetch(imgUrl)
+            .then(function(r) {
+                var ct = r.headers.get("content-type") || "";
+                if (ct.indexOf("image/") >= 0) {
+                    // Sukces - obraz
+                    return r.blob().then(function(blob) {
+                        return { ok: true, blob: blob };
+                    });
+                } else {
+                    // Blad - JSON lub XML
+                    return r.text().then(function(text) {
+                        var errMsg = "Blad serwera";
+                        try {
+                            var json = JSON.parse(text);
+                            errMsg = json.error || errMsg;
+                        } catch(e) {
+                            errMsg = text.substring(0, 80);
+                        }
+                        return { ok: false, error: errMsg };
+                    });
+                }
+            })
+            .then(function(result) {
+                wmsLoading = false;
+                if (result.ok) {
+                    var url = URL.createObjectURL(result.blob);
+                    var img = new Image();
+                    img.onload = function() {
+                        wmsImage = img;
+                        wmsImageReady = true;
+                        wmsImageBbox = bbox.slice();
+                        wmsLastBbox = bboxKey;
+                        updateOgcStatus("WMS: OK (" + layers.length + " warstw)");
+                        drawMap();
+                    };
+                    img.onerror = function() {
+                        updateOgcStatus("WMS: blad dekodowania obrazu");
+                    };
+                    img.src = url;
+                } else {
+                    // Blad - jesli wiele warstw, sprobuj bez ostatniej
+                    if (layers.length > 1) {
+                        updateOgcStatus("WMS: blad warstwy, probuje pozostale...");
+                        // Sprobuj po jednej zeby znalezc dzialaajce
+                        fetchWmsLayerByLayer(layers, bbox, bboxKey, 0, []);
+                    } else {
+                        updateOgcStatus("WMS: " + result.error);
+                        // Nie kasuj obrazu z poprzedniego udanego requestu
+                    }
+                }
+            })
+            .catch(function() {
+                wmsLoading = false;
+                updateOgcStatus("WMS: blad sieci");
+            });
+    }
 
-        img.onload = function() {
-            wmsLoading = false;
-            wmsImage = img;
-            wmsImageReady = true;
-            wmsImageBbox = bbox.slice();
-            wmsLastBbox = bboxKey;
-            updateOgcStatus("WMS: OK (" + layers.length + " warstw)");
-            drawMap();
-        };
+    function fetchWmsLayerByLayer(allLayers, bbox, bboxKey, idx, working) {
+        // Probuj warstwy po jednej, zbierz dzialajace
+        if (idx >= allLayers.length) {
+            // Mamy liste dzialajacych warstw
+            if (working.length > 0) {
+                wmsLoading = true;
+                var w = mapView.w, h = mapView.h;
+                var imgUrl = "/api/wms/map?" +
+                    "url=" + encodeURIComponent(ogcUrl) +
+                    "&layers=" + encodeURIComponent(working.join(",")) +
+                    "&bbox=" + bbox.join(",") +
+                    "&width=" + w + "&height=" + h +
+                    "&srs=EPSG:2177&version=" + encodeURIComponent(ogcVersion) +
+                    "&format=image/png";
 
-        img.onerror = function() {
-            wmsLoading = false;
-            updateOgcStatus("WMS: blad ladowania obrazu");
-        };
+                var img = new Image();
+                img.onload = function() {
+                    wmsLoading = false;
+                    wmsImage = img;
+                    wmsImageReady = true;
+                    wmsImageBbox = bbox.slice();
+                    wmsLastBbox = bboxKey;
+                    var failed = allLayers.length - working.length;
+                    updateOgcStatus("WMS: " + working.length + " warstw OK" + (failed > 0 ? ", " + failed + " blad" : ""));
+                    drawMap();
+                };
+                img.onerror = function() {
+                    wmsLoading = false;
+                    updateOgcStatus("WMS: blad po filtracji");
+                };
+                img.src = imgUrl;
+            } else {
+                updateOgcStatus("WMS: zadna warstwa nie dziala");
+            }
+            return;
+        }
 
-        img.src = imgUrl;
+        // Testuj pojedyncza warstwe
+        var testLayer = allLayers[idx];
+        var w = mapView.w, h = mapView.h;
+        var testUrl = "/api/wms/map?" +
+            "url=" + encodeURIComponent(ogcUrl) +
+            "&layers=" + encodeURIComponent(testLayer) +
+            "&bbox=" + bbox.join(",") +
+            "&width=64&height=64" +  // maly obraz testowy
+            "&srs=EPSG:2177&version=" + encodeURIComponent(ogcVersion) +
+            "&format=image/png";
+
+        fetch(testUrl)
+            .then(function(r) {
+                var ct = r.headers.get("content-type") || "";
+                if (ct.indexOf("image/") >= 0) {
+                    working.push(testLayer);
+                } else {
+                    // Ta warstwa nie dziala - pomin ja
+                    updateOgcStatus("WMS: warstwa '" + testLayer.substring(0, 20) + "' blad, pomijam");
+                }
+                fetchWmsLayerByLayer(allLayers, bbox, bboxKey, idx + 1, working);
+            })
+            .catch(function() {
+                fetchWmsLayerByLayer(allLayers, bbox, bboxKey, idx + 1, working);
+            });
     }
 
     // === Drawing ===
@@ -1940,9 +2086,10 @@
     }
 
     function drawWfsFeatures(ctx, w, h) {
-        ctx.strokeStyle = "#00e5ff";
+        var t = T();
+        ctx.strokeStyle = t.wfsLine;
         ctx.lineWidth = 1.5;
-        ctx.fillStyle = "#00e5ff";
+        ctx.fillStyle = t.wfsFill;
 
         for (var i = 0; i < wfsFeatures.length; i++) {
             var f = wfsFeatures[i];

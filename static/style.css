@@ -670,6 +670,12 @@ footer {
     white-space: nowrap;
 }
 
+.ogc-select-all {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px !important;
+    margin-bottom: 2px;
+}
+
 .wfs-scale-notice {
     margin-top: 6px;
     padding: 4px 8px;

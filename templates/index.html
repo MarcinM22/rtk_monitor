@@ -253,15 +253,19 @@
                     <span id="map-scale"></span>
                 </div>
 
-                <!-- Panel WFS -->
+                <!-- Panel WFS / WMS -->
                 <div class="wfs-panel">
                     <div class="wfs-header">
-                        <span>WFS</span>
+                        <span id="ogc-title">Uslugi OGC</span>
                         <button class="btn-small" id="btn-wfs-toggle">Rozwin</button>
                     </div>
                     <div id="wfs-settings" class="hidden">
+                        <div class="ogc-type-row">
+                            <label class="ogc-radio"><input type="radio" name="ogc-type" value="wfs" checked> WFS (wektor)</label>
+                            <label class="ogc-radio"><input type="radio" name="ogc-type" value="wms"> WMS (raster)</label>
+                        </div>
                         <div class="wfs-url-row">
-                            <input type="text" id="wfs-url" placeholder="URL serwera WFS (GetCapabilities)">
+                            <input type="text" id="wfs-url" placeholder="URL serwera WFS lub WMS">
                             <button class="btn-small btn-wfs-connect" id="btn-wfs-connect">Polacz</button>
                         </div>
                         <div id="wfs-error" class="wfs-error hidden"></div>

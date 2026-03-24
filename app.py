@@ -587,6 +587,61 @@ def wfs_features():
         return jsonify({'error': str(e), 'features': []}), 502
 
 
+# === WMS Proxy ===
+
+@app.route('/api/wms/capabilities', methods=['GET'])
+def wms_capabilities():
+    """Proxy: GetCapabilities z serwera WMS."""
+    wms_url = request.args.get('url', '')
+    if not wms_url:
+        return jsonify({'error': 'Podaj URL serwera WMS'}), 400
+    try:
+        from wms_proxy import get_capabilities
+        result = get_capabilities(wms_url)
+        return jsonify(result)
+    except Exception as e:
+        logger.error("WMS capabilities error: %s", e)
+        return jsonify({'error': str(e), 'layers': []}), 502
+
+
+@app.route('/api/wms/map', methods=['GET'])
+def wms_map():
+    """Proxy: GetMap - zwraca obraz PNG/JPEG."""
+    from flask import Response
+    wms_url = request.args.get('url', '')
+    layers = request.args.get('layers', '')
+    bbox = request.args.get('bbox', '')
+    width = request.args.get('width', '800')
+    height = request.args.get('height', '600')
+    srs = request.args.get('srs', 'EPSG:2177')
+    version = request.args.get('version', '1.1.1')
+    fmt = request.args.get('format', 'image/png')
+
+    if not wms_url or not layers or not bbox:
+        return jsonify({'error': 'Wymagane: url, layers, bbox, width, height'}), 400
+
+    try:
+        parts = [float(x) for x in bbox.split(',')]
+        if len(parts) != 4:
+            raise ValueError("BBOX wymaga 4 wartosci")
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    try:
+        from wms_proxy import get_map_image
+        data, ct = get_map_image(
+            wms_url, layers, tuple(parts),
+            int(width), int(height), srs, version, fmt
+        )
+        if data is None:
+            return jsonify({'error': ct}), 502
+        return Response(data, mimetype=ct or 'image/png',
+                        headers={'Cache-Control': 'max-age=30'})
+    except Exception as e:
+        logger.error("WMS map error: %s", e)
+        return jsonify({'error': str(e)}), 502
+
+
 # === Main ===
 
 def main():

@@ -679,3 +679,20 @@ footer {
     font-size: 0.72rem;
     text-align: center;
 }
+
+.ogc-type-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 8px;
+}
+
+.ogc-radio {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+
+.ogc-radio input { cursor: pointer; }
